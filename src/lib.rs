@@ -149,23 +149,21 @@ impl<'a> Tokeniser<'a> {
     pub fn collect_with_location(mut self) -> Vec<TokenWithLocation> {
         let mut v = Vec::new();
 
-        while {
-            self.skip_whitespace();
-            let loc = self.location();
-            match self.next() {
-                Some(t) => {
-                    v.push(TokenWithLocation(t, loc));
-                    true
-                }
-                None => false,
-            }
-        } {}
+        while let Some(t) = self.next_with_location() {
+            v.push(t)
+        }
 
         v
     }
 
     pub fn location(&self) -> Location {
         Location { line: self.line, col: self.col }
+    }
+
+    pub fn next_with_location(&mut self) -> Option<TokenWithLocation> {
+        self.skip_whitespace();
+        let loc = self.location();
+        self.next().map(|t| TokenWithLocation(t, loc))
     }
 
     pub fn next(&mut self) -> Option<Token> {
