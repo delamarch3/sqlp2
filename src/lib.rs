@@ -9,7 +9,7 @@ enum Token {
 
     // Literals
     StringLiteral(String),
-    IntegerLiteral(String),
+    NumberLiteral(String),
 
     // Operators
     Eq,
@@ -171,9 +171,23 @@ impl<'a> Tokeniser<'a> {
             return None;
         }
 
-        match self.chars.peek() {
+        match self.peek_char() {
             Some(&c) => match c {
-                '0'..='9' => todo!("integer literal"),
+                '0'..='9' | '.' => {
+                    let mut s = self.peeking_take_while(|c| c.is_numeric());
+
+                    if let Some('.') = self.peek_char() {
+                        self.next_char();
+                        s.push('.');
+                        s.push_str(&self.peeking_take_while(|c| c.is_numeric()))
+                    }
+
+                    if s == "." {
+                        return Some(Token::Dot);
+                    }
+
+                    Some(Token::NumberLiteral(s))
+                }
                 '"' => todo!("string literal"),
                 '`' => todo!("quoted identifier"),
                 '(' => self.consume(Token::LParen),
@@ -185,7 +199,6 @@ impl<'a> Tokeniser<'a> {
                 '!' => todo!("neq"),
                 ';' => self.consume(Token::Semicolon),
                 '*' => self.consume(Token::Asterisk),
-                '.' => self.consume(Token::Dot),
                 ch if ch.is_ascii_lowercase() || ch.is_ascii_uppercase() || ch == '_' => {
                     // identifier or keyword:
 
@@ -374,6 +387,21 @@ mod test {
             Token::Word(Word { value: "s1".into(), keyword: Keyword::None }),
             Token::Dot,
             Token::Word(Word { value: "t1".into(), keyword: Keyword::None })
+        ]
+    );
+
+    test_tokeniser!(
+        test_select_int_and_float,
+        "SELECT 1, 2.34, 5., .5",
+        [
+            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
+            Token::NumberLiteral("1".into()),
+            Token::Comma,
+            Token::NumberLiteral("2.34".into()),
+            Token::Comma,
+            Token::NumberLiteral("5.".into()),
+            Token::Comma,
+            Token::NumberLiteral(".5".into()),
         ]
     );
 }
