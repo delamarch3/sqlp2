@@ -1,3 +1,3 @@
 # use max_width for all granular width settings:
 max_width = 100
-use_small_heuristics = Max
+use_small_heuristics = "Max"
