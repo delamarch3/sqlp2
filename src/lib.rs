@@ -25,6 +25,7 @@ enum Token {
     Semicolon,
     Comma,
     Asterisk,
+    Dot,
 }
 
 #[derive(Debug, PartialEq)]
@@ -175,15 +176,16 @@ impl<'a> Tokeniser<'a> {
                 '0'..='9' => todo!("integer literal"),
                 '"' => todo!("string literal"),
                 '`' => todo!("quoted identifier"),
-                '(' => todo!("lparen"),
-                ')' => todo!("rparen"),
-                ',' => todo!("comma"),
+                '(' => self.consume(Token::LParen),
+                ')' => self.consume(Token::RParen),
+                ',' => self.consume(Token::Comma),
                 '>' => todo!("ge/gt"),
                 '<' => todo!("le/lt"),
                 '=' => todo!("eq"),
                 '!' => todo!("neq"),
-                ';' => todo!("semicolon"),
-                '*' => todo!("asterisk"),
+                ';' => self.consume(Token::Semicolon),
+                '*' => self.consume(Token::Asterisk),
+                '.' => self.consume(Token::Dot),
                 ch if ch.is_ascii_lowercase() || ch.is_ascii_uppercase() || ch == '_' => {
                     // identifier or keyword:
 
@@ -198,6 +200,11 @@ impl<'a> Tokeniser<'a> {
             },
             None => None,
         }
+    }
+
+    fn consume(&mut self, t: Token) -> Option<Token> {
+        self.next_char();
+        Some(t)
     }
 
     /// Skip any whitespace chars, returns true if there are any remaining chars
@@ -347,6 +354,25 @@ mod test {
             Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
             Token::Word(Word { value: "c1".into(), keyword: Keyword::None }),
             Token::Word(Word { value: "FROM".into(), keyword: Keyword::From }),
+            Token::Word(Word { value: "t1".into(), keyword: Keyword::None })
+        ]
+    );
+
+    test_tokeniser!(
+        test_select_multi_ident_from,
+        "SELECT s1.t1.c1, c2 FROM s1.t1",
+        [
+            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
+            Token::Word(Word { value: "s1".into(), keyword: Keyword::None }),
+            Token::Dot,
+            Token::Word(Word { value: "t1".into(), keyword: Keyword::None }),
+            Token::Dot,
+            Token::Word(Word { value: "c1".into(), keyword: Keyword::None }),
+            Token::Comma,
+            Token::Word(Word { value: "c2".into(), keyword: Keyword::None }),
+            Token::Word(Word { value: "FROM".into(), keyword: Keyword::From }),
+            Token::Word(Word { value: "s1".into(), keyword: Keyword::None }),
+            Token::Dot,
             Token::Word(Word { value: "t1".into(), keyword: Keyword::None })
         ]
     );
