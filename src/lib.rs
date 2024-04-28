@@ -28,6 +28,15 @@ enum Token {
 }
 
 #[derive(Debug, PartialEq)]
+struct Location {
+    line: u64,
+    col: u64,
+}
+
+#[derive(Debug, PartialEq)]
+struct TokenWithLocation(Token, Location);
+
+#[derive(Debug, PartialEq)]
 struct Word {
     value: String,
     keyword: Keyword,
@@ -134,6 +143,28 @@ impl<'a> Tokeniser<'a> {
         v
     }
 
+    pub fn collect_with_location(mut self) -> Vec<TokenWithLocation> {
+        let mut v = Vec::new();
+
+        while {
+            self.skip_whitespace();
+            let loc = self.location();
+            match self.next() {
+                Some(t) => {
+                    v.push(TokenWithLocation(t, loc));
+                    true
+                }
+                None => false,
+            }
+        } {}
+
+        v
+    }
+
+    pub fn location(&self) -> Location {
+        Location { line: self.line, col: self.col }
+    }
+
     pub fn next(&mut self) -> Option<Token> {
         if !self.skip_whitespace() {
             return None;
@@ -217,7 +248,7 @@ impl<'a> Tokeniser<'a> {
         match self.chars.next() {
             Some(c) => {
                 if c == '\n' {
-                    self.col = 1;
+                    self.col = 0;
                     self.line += 1;
                 } else {
                     self.col += 1;
@@ -259,10 +290,30 @@ mod test {
         };
     }
 
+    macro_rules! test_tokeniser_with_location {
+        ($name:tt, $input:expr, $want:expr) => {
+            #[test]
+            fn $name() {
+                let tokeniser = Tokeniser::new($input);
+                let have = tokeniser.collect_with_location();
+                assert_eq!(Vec::from($want), have);
+            }
+        };
+    }
+
     test_tokeniser!(
         test_select,
         "SELECT",
         [Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select })]
+    );
+
+    test_tokeniser_with_location!(
+        test_select_with_location,
+        "SELECT",
+        [TokenWithLocation(
+            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
+            Location { line: 0, col: 0 }
+        )]
     );
 
     test_tokeniser!(
@@ -271,6 +322,21 @@ mod test {
         [
             Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
             Token::Word(Word { value: "c1".into(), keyword: Keyword::None })
+        ]
+    );
+
+    test_tokeniser_with_location!(
+        test_whitespace_with_location,
+        "    # This is a comment\n\tSELECT #c2\n#This is another comment\nc1",
+        [
+            TokenWithLocation(
+                Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
+                Location { line: 1, col: 1 }
+            ),
+            TokenWithLocation(
+                Token::Word(Word { value: "c1".into(), keyword: Keyword::None }),
+                Location { line: 3, col: 0 }
+            )
         ]
     );
 
