@@ -178,7 +178,10 @@ impl<'a> Tokeniser<'a> {
                     continue;
                 }
                 Some(c) => match c {
-                    '#' => return self.skip_line(),
+                    '#' => {
+                        self.skip_line();
+                        continue;
+                    }
                     _ => return true,
                 },
                 None => return false,
@@ -202,8 +205,8 @@ impl<'a> Tokeniser<'a> {
             }
         }
 
-        self.next();
-        self.chars.peek().is_some()
+        self.next_char();
+        self.peek_char().is_some()
     }
 
     fn peek_char(&mut self) -> Option<&char> {
@@ -251,7 +254,7 @@ mod test {
             fn $name() {
                 let tokeniser = Tokeniser::new($input);
                 let have = tokeniser.collect();
-                assert_eq!($want, have);
+                assert_eq!(Vec::from($want), have);
             }
         };
     }
@@ -259,13 +262,22 @@ mod test {
     test_tokeniser!(
         test_select,
         "SELECT",
-        vec![Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select })]
+        [Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select })]
+    );
+
+    test_tokeniser!(
+        test_whitespace,
+        "    # This is a comment\n\tSELECT #c2\n#This is another comment\nc1",
+        [
+            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
+            Token::Word(Word { value: "c1".into(), keyword: Keyword::None })
+        ]
     );
 
     test_tokeniser!(
         test_select_ident_from,
         "SELECT c1 FROM t1",
-        vec![
+        [
             Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
             Token::Word(Word { value: "c1".into(), keyword: Keyword::None }),
             Token::Word(Word { value: "FROM".into(), keyword: Keyword::From }),
