@@ -122,12 +122,7 @@ struct Tokeniser<'a> {
 
 impl<'a> Tokeniser<'a> {
     pub fn new(src: &'a str) -> Self {
-        Self {
-            src,
-            chars: src.chars().peekable(),
-            line: 0,
-            col: 0,
-        }
+        Self { src, chars: src.chars().peekable(), line: 0, col: 0 }
     }
 
     pub fn collect(mut self) -> Vec<Token> {
@@ -166,10 +161,7 @@ impl<'a> Tokeniser<'a> {
                     });
 
                     let uppercase_s = s.to_uppercase();
-                    Some(Token::Word(Word {
-                        value: s,
-                        keyword: uppercase_s.into(),
-                    }))
+                    Some(Token::Word(Word { value: s, keyword: uppercase_s.into() }))
                 }
                 ch => unimplemented!("unhandled char: {ch}"),
             },
@@ -267,13 +259,9 @@ mod test {
     test_tokeniser!(
         test_select,
         "SELECT",
-        vec![Token::Word(Word {
-            value: "SELECT".into(),
-            keyword: Keyword::Select
-        })]
+        vec![Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select })]
     );
 
-    #[rustfmt::skip]
     test_tokeniser!(
         test_select_ident_from,
         "SELECT c1 FROM t1",
