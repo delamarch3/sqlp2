@@ -4,8 +4,8 @@ use std::{iter::Peekable, str::Chars};
 enum Token {
     Eof,
 
-    // Keywords or Identifiers
-    Word(Word),
+    Keyword(Keyword),
+    Ident(String),
 
     // Literals
     StringLiteral(String),
@@ -45,8 +45,6 @@ struct Word {
 
 #[derive(Debug, PartialEq)]
 enum Keyword {
-    None,
-
     Int,
     Varchar,
 
@@ -82,9 +80,11 @@ enum Keyword {
     False,
 }
 
-impl From<String> for Keyword {
-    fn from(s: String) -> Self {
-        match s.as_str() {
+impl TryFrom<String> for Keyword {
+    type Error = ();
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let kw = match s.as_str() {
             "AND" => Keyword::And,
             "AS" => Keyword::As,
             "ASC" => Keyword::Asc,
@@ -118,8 +118,10 @@ impl From<String> for Keyword {
             "WHERE" => Keyword::Where,
             "ORDER" => Keyword::Order,
 
-            _ => Keyword::None,
-        }
+            _ => Err(())?,
+        };
+
+        Ok(kw)
     }
 }
 
@@ -190,13 +192,31 @@ impl<'a> Tokeniser<'a> {
                 }
                 '"' => todo!("string literal"),
                 '`' => todo!("quoted identifier"),
+                '>' => {
+                    self.next_char();
+                    match self.peek_char() {
+                        Some('=') => self.consume(Token::Ge),
+                        _ => Some(Token::Gt),
+                    }
+                }
+                '<' => {
+                    self.next_char();
+                    match self.peek_char() {
+                        Some('=') => self.consume(Token::Le),
+                        _ => Some(Token::Lt),
+                    }
+                }
+                '!' => {
+                    self.next_char();
+                    match self.peek_char() {
+                        Some('=') => self.consume(Token::Neq),
+                        _ => todo!("error"),
+                    }
+                }
+                '=' => self.consume(Token::Eq),
                 '(' => self.consume(Token::LParen),
                 ')' => self.consume(Token::RParen),
                 ',' => self.consume(Token::Comma),
-                '>' => todo!("ge/gt"),
-                '<' => todo!("le/lt"),
-                '=' => todo!("eq"),
-                '!' => todo!("neq"),
                 ';' => self.consume(Token::Semicolon),
                 '*' => self.consume(Token::Asterisk),
                 ch if ch.is_ascii_lowercase() || ch.is_ascii_uppercase() || ch == '_' => {
@@ -206,8 +226,10 @@ impl<'a> Tokeniser<'a> {
                         c.is_alphabetic() || c.is_ascii_digit() || c == '_'
                     });
 
-                    let uppercase_s = s.to_uppercase();
-                    Some(Token::Word(Word { value: s, keyword: uppercase_s.into() }))
+                    match Keyword::try_from(s.to_uppercase()) {
+                        Ok(kw) => Some(Token::Keyword(kw)),
+                        _ => Some(Token::Ident(s)),
+                    }
                 }
                 ch => unimplemented!("unhandled char: {ch}"),
             },
@@ -321,42 +343,26 @@ mod test {
         };
     }
 
-    test_tokeniser!(
-        test_select,
-        "SELECT",
-        [Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select })]
-    );
+    test_tokeniser!(test_select, "SELECT", [Token::Keyword(Keyword::Select)]);
 
     test_tokeniser_with_location!(
         test_select_with_location,
         "SELECT",
-        [TokenWithLocation(
-            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
-            Location { line: 0, col: 0 }
-        )]
+        [TokenWithLocation(Token::Keyword(Keyword::Select), Location { line: 0, col: 0 })]
     );
 
     test_tokeniser!(
         test_whitespace,
         "    # This is a comment\n\tSELECT #c2\n#This is another comment\nc1",
-        [
-            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
-            Token::Word(Word { value: "c1".into(), keyword: Keyword::None })
-        ]
+        [Token::Keyword(Keyword::Select), Token::Ident("c1".into())]
     );
 
     test_tokeniser_with_location!(
         test_whitespace_with_location,
         "    # This is a comment\n\tSELECT #c2\n#This is another comment\nc1",
         [
-            TokenWithLocation(
-                Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
-                Location { line: 1, col: 1 }
-            ),
-            TokenWithLocation(
-                Token::Word(Word { value: "c1".into(), keyword: Keyword::None }),
-                Location { line: 3, col: 0 }
-            )
+            TokenWithLocation(Token::Keyword(Keyword::Select), Location { line: 1, col: 1 }),
+            TokenWithLocation(Token::Ident("c1".into()), Location { line: 3, col: 0 })
         ]
     );
 
@@ -364,10 +370,10 @@ mod test {
         test_select_ident_from,
         "SELECT c1 FROM t1",
         [
-            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
-            Token::Word(Word { value: "c1".into(), keyword: Keyword::None }),
-            Token::Word(Word { value: "FROM".into(), keyword: Keyword::From }),
-            Token::Word(Word { value: "t1".into(), keyword: Keyword::None })
+            Token::Keyword(Keyword::Select),
+            Token::Ident("c1".into()),
+            Token::Keyword(Keyword::From),
+            Token::Ident("t1".into())
         ]
     );
 
@@ -375,18 +381,18 @@ mod test {
         test_select_multi_ident_from,
         "SELECT s1.t1.c1, c2 FROM s1.t1",
         [
-            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
-            Token::Word(Word { value: "s1".into(), keyword: Keyword::None }),
+            Token::Keyword(Keyword::Select),
+            Token::Ident("s1".into()),
             Token::Dot,
-            Token::Word(Word { value: "t1".into(), keyword: Keyword::None }),
+            Token::Ident("t1".into()),
             Token::Dot,
-            Token::Word(Word { value: "c1".into(), keyword: Keyword::None }),
+            Token::Ident("c1".into()),
             Token::Comma,
-            Token::Word(Word { value: "c2".into(), keyword: Keyword::None }),
-            Token::Word(Word { value: "FROM".into(), keyword: Keyword::From }),
-            Token::Word(Word { value: "s1".into(), keyword: Keyword::None }),
+            Token::Ident("c2".into()),
+            Token::Keyword(Keyword::From),
+            Token::Ident("s1".into()),
             Token::Dot,
-            Token::Word(Word { value: "t1".into(), keyword: Keyword::None })
+            Token::Ident("t1".into()),
         ]
     );
 
@@ -394,7 +400,7 @@ mod test {
         test_select_int_and_float,
         "SELECT 1, 2.34, 5., .5",
         [
-            Token::Word(Word { value: "SELECT".into(), keyword: Keyword::Select }),
+            Token::Keyword(Keyword::Select),
             Token::NumberLiteral("1".into()),
             Token::Comma,
             Token::NumberLiteral("2.34".into()),
@@ -402,6 +408,33 @@ mod test {
             Token::NumberLiteral("5.".into()),
             Token::Comma,
             Token::NumberLiteral(".5".into()),
+        ]
+    );
+
+    test_tokeniser!(
+        test_select_where,
+        "SELECT * FROM t1 WHERE a < b OR b <= c OR c > d OR d >= e",
+        [
+            Token::Keyword(Keyword::Select),
+            Token::Asterisk,
+            Token::Keyword(Keyword::From),
+            Token::Ident("t1".into()),
+            Token::Keyword(Keyword::Where),
+            Token::Ident("a".into()),
+            Token::Lt,
+            Token::Ident("b".into()),
+            Token::Keyword(Keyword::Or),
+            Token::Ident("b".into()),
+            Token::Le,
+            Token::Ident("c".into()),
+            Token::Keyword(Keyword::Or),
+            Token::Ident("c".into()),
+            Token::Gt,
+            Token::Ident("d".into()),
+            Token::Keyword(Keyword::Or),
+            Token::Ident("d".into()),
+            Token::Ge,
+            Token::Ident("e".into()),
         ]
     );
 }
