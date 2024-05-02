@@ -248,13 +248,11 @@ impl<'a> Tokeniser<'a> {
                     self.next_char();
                     continue;
                 }
-                Some(c) => match c {
-                    '#' => {
-                        self.skip_line();
-                        continue;
-                    }
-                    _ => return true,
-                },
+                Some('#') => {
+                    self.skip_line();
+                    continue;
+                }
+                Some(_) => return true,
                 None => return false,
             }
         }
