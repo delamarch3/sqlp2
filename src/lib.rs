@@ -188,8 +188,26 @@ impl<'a> Tokeniser<'a> {
 
                     Some(Token::NumberLiteral(s))
                 }
-                '"' => todo!("string literal"),
-                '`' => todo!("quoted identifier"),
+                '"' => {
+                    self.next_char();
+                    let s = self.peeking_take_while(|c| c != '"');
+                    if self.next_char() != Some('"') {
+                        todo!("error")
+                    }
+
+                    Some(Token::StringLiteral(s))
+                }
+                '`' => {
+                    self.next_char();
+                    let s = self.peeking_take_while(|c| {
+                        c.is_alphabetic() || c.is_ascii_digit() || c == '_'
+                    });
+                    if self.next_char() != Some('`') {
+                        todo!("error")
+                    }
+
+                    Some(Token::Ident(s))
+                }
                 '>' => {
                     self.next_char();
                     match self.peek_char() {
@@ -431,6 +449,31 @@ mod test {
             Token::Ident("d".into()),
             Token::Ge,
             Token::Ident("e".into()),
+        ]
+    );
+
+    test_tokeniser!(
+        test_select_string,
+        "SELECT \"c1\"",
+        [Token::Keyword(Keyword::Select), Token::StringLiteral("c1".into())]
+    );
+
+    test_tokeniser!(
+        test_select_multi_line_string,
+        "SELECT \"c1
+2
+3\"",
+        [Token::Keyword(Keyword::Select), Token::StringLiteral("c1\n2\n3".into())]
+    );
+
+    test_tokeniser!(
+        test_select_quoted_ident,
+        "SELECT `s1`.`t1`",
+        [
+            Token::Keyword(Keyword::Select),
+            Token::Ident("s1".into()),
+            Token::Dot,
+            Token::Ident("t1".into())
         ]
     );
 }
