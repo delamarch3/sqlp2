@@ -41,7 +41,7 @@ impl std::fmt::Display for Location {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct TokenWithLocation(Token, Location);
+pub(crate) struct TokenWithLocation(pub Token, pub Location);
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Word {
@@ -167,18 +167,24 @@ impl<'a> Tokeniser<'a> {
 
     pub fn collect(mut self) -> Result<Vec<Token>, TokeniserError> {
         let mut v = Vec::new();
-        while let Some(t) = self.next()? {
-            v.push(t)
-        }
+        while {
+            let token = self.next()?;
+            let eof = token == Token::Eof;
+            v.push(token);
+            !eof
+        } {}
 
         Ok(v)
     }
 
     pub fn collect_with_location(mut self) -> Result<Vec<TokenWithLocation>, TokeniserError> {
         let mut v = Vec::new();
-        while let Some(t) = self.next_with_location()? {
-            v.push(t)
-        }
+        while {
+            let TokenWithLocation(token, location) = self.next_with_location()?;
+            let eof = token == Token::Eof;
+            v.push(TokenWithLocation(token, location));
+            !eof
+        } {}
 
         Ok(v)
     }
@@ -187,15 +193,15 @@ impl<'a> Tokeniser<'a> {
         Location { line: self.line, col: self.col }
     }
 
-    pub fn next_with_location(&mut self) -> Result<Option<TokenWithLocation>, TokeniserError> {
+    pub fn next_with_location(&mut self) -> Result<TokenWithLocation, TokeniserError> {
         self.skip_whitespace();
         let loc = self.location();
-        self.next().map(|o| o.map(|t| TokenWithLocation(t, loc)))
+        self.next().map(|t| TokenWithLocation(t, loc))
     }
 
-    pub fn next(&mut self) -> Result<Option<Token>, TokeniserError> {
+    pub fn next(&mut self) -> Result<Token, TokeniserError> {
         if !self.skip_whitespace() {
-            return Ok(None);
+            return Ok(Token::Eof);
         }
 
         match self.peek_char() {
@@ -210,10 +216,10 @@ impl<'a> Tokeniser<'a> {
                     }
 
                     if s == "." {
-                        return Ok(Some(Token::Dot));
+                        return Ok(Token::Dot);
                     }
 
-                    Ok(Some(Token::NumberLiteral(s)))
+                    Ok(Token::NumberLiteral(s))
                 }
                 '"' => {
                     self.next_char();
@@ -223,7 +229,7 @@ impl<'a> Tokeniser<'a> {
                         have => Err(TokeniserError::unexpected('"', have, self.location()))?,
                     }
 
-                    Ok(Some(Token::StringLiteral(s)))
+                    Ok(Token::StringLiteral(s))
                 }
                 '`' => {
                     self.next_char();
@@ -235,20 +241,20 @@ impl<'a> Tokeniser<'a> {
                         have => Err(TokeniserError::unexpected('`', have, self.location()))?,
                     }
 
-                    Ok(Some(Token::Ident(s)))
+                    Ok(Token::Ident(s))
                 }
                 '>' => {
                     self.next_char();
                     match self.peek_char() {
                         Some('=') => self.consume(Token::Ge),
-                        _ => Ok(Some(Token::Gt)),
+                        _ => Ok(Token::Gt),
                     }
                 }
                 '<' => {
                     self.next_char();
                     match self.peek_char() {
                         Some('=') => self.consume(Token::Le),
-                        _ => Ok(Some(Token::Lt)),
+                        _ => Ok(Token::Lt),
                     }
                 }
                 '!' => {
@@ -273,19 +279,19 @@ impl<'a> Tokeniser<'a> {
                     });
 
                     match Keyword::try_from(s.to_uppercase()) {
-                        Ok(kw) => Ok(Some(Token::Keyword(kw))),
-                        _ => Ok(Some(Token::Ident(s))),
+                        Ok(kw) => Ok(Token::Keyword(kw)),
+                        _ => Ok(Token::Ident(s)),
                     }
                 }
                 ch => unimplemented!("unhandled char: {ch}"),
             },
-            None => Ok(None),
+            None => Ok(Token::Eof),
         }
     }
 
-    fn consume(&mut self, t: Token) -> Result<Option<Token>, TokeniserError> {
+    fn consume(&mut self, t: Token) -> Result<Token, TokeniserError> {
         self.next_char();
-        Ok(Some(t))
+        Ok(t)
     }
 
     /// Skip any whitespace chars, returns true if there are any remaining chars
@@ -387,18 +393,21 @@ mod test {
         };
     }
 
-    test_tokeniser!(test_select, "SELECT", [Token::Keyword(Keyword::Select)]);
+    test_tokeniser!(test_select, "SELECT", [Token::Keyword(Keyword::Select), Token::Eof]);
 
     test_tokeniser_with_location!(
         test_select_with_location,
         "SELECT",
-        [TokenWithLocation(Token::Keyword(Keyword::Select), Location { line: 0, col: 0 })]
+        [
+            TokenWithLocation(Token::Keyword(Keyword::Select), Location { line: 0, col: 0 }),
+            TokenWithLocation(Token::Eof, Location { line: 0, col: 6 })
+        ]
     );
 
     test_tokeniser!(
         test_whitespace,
         "    # This is a comment\n\tSELECT #c2\n#This is another comment\nc1",
-        [Token::Keyword(Keyword::Select), Token::Ident("c1".into())]
+        [Token::Keyword(Keyword::Select), Token::Ident("c1".into()), Token::Eof]
     );
 
     test_tokeniser_with_location!(
@@ -406,7 +415,8 @@ mod test {
         "    # This is a comment\n\tSELECT #c2\n#This is another comment\nc1",
         [
             TokenWithLocation(Token::Keyword(Keyword::Select), Location { line: 1, col: 1 }),
-            TokenWithLocation(Token::Ident("c1".into()), Location { line: 3, col: 0 })
+            TokenWithLocation(Token::Ident("c1".into()), Location { line: 3, col: 0 }),
+            TokenWithLocation(Token::Eof, Location { line: 3, col: 2 })
         ]
     );
 
@@ -417,7 +427,8 @@ mod test {
             Token::Keyword(Keyword::Select),
             Token::Ident("c1".into()),
             Token::Keyword(Keyword::From),
-            Token::Ident("t1".into())
+            Token::Ident("t1".into()),
+            Token::Eof
         ]
     );
 
@@ -437,6 +448,7 @@ mod test {
             Token::Ident("s1".into()),
             Token::Dot,
             Token::Ident("t1".into()),
+            Token::Eof
         ]
     );
 
@@ -452,6 +464,7 @@ mod test {
             Token::NumberLiteral("5.".into()),
             Token::Comma,
             Token::NumberLiteral(".5".into()),
+            Token::Eof
         ]
     );
 
@@ -479,13 +492,14 @@ mod test {
             Token::Ident("d".into()),
             Token::Ge,
             Token::Ident("e".into()),
+            Token::Eof
         ]
     );
 
     test_tokeniser!(
         test_select_string,
         "SELECT \"c1\"",
-        [Token::Keyword(Keyword::Select), Token::StringLiteral("c1".into())]
+        [Token::Keyword(Keyword::Select), Token::StringLiteral("c1".into()), Token::Eof]
     );
 
     test_tokeniser!(
@@ -493,7 +507,7 @@ mod test {
         "SELECT \"c1
 2
 3\"",
-        [Token::Keyword(Keyword::Select), Token::StringLiteral("c1\n2\n3".into())]
+        [Token::Keyword(Keyword::Select), Token::StringLiteral("c1\n2\n3".into()), Token::Eof]
     );
 
     test_tokeniser!(
@@ -503,7 +517,8 @@ mod test {
             Token::Keyword(Keyword::Select),
             Token::Ident("s1".into()),
             Token::Dot,
-            Token::Ident("t1".into())
+            Token::Ident("t1".into()),
+            Token::Eof
         ]
     );
 }
