@@ -28,7 +28,7 @@ pub(crate) enum Token {
     Dot,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub(crate) struct Location {
     line: u64,
     col: u64,
@@ -40,7 +40,7 @@ impl std::fmt::Display for Location {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TokenWithLocation(pub Token, pub Location);
 
 #[derive(Debug, PartialEq)]
