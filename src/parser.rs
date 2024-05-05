@@ -133,31 +133,29 @@ impl Parser {
     }
 
     fn parse_column_def(&mut self) -> Result<ColumnDef> {
-        let name = match self.next() {
-            TokenWithLocation(token, location) => match token {
-                Token::Ident(name) => name,
-                _ => Err(Unexpected(&token, &location))?,
-            },
+        let TokenWithLocation(token, location) = self.next();
+        let name = match token {
+            Token::Ident(name) => name,
+            _ => Err(Unexpected(&token, &location))?,
         };
 
-        let ty = match self.next() {
-            TokenWithLocation(token, location) => match token {
-                Token::Keyword(Keyword::Int) => ColumnType::Int,
-                Token::Keyword(Keyword::Varchar) => {
-                    self.parse_tokens(&[Token::LParen])?;
-                    let max: u16 = match self.next() {
-                        TokenWithLocation(token, location) => match token {
-                            Token::NumberLiteral(ref max) => {
-                                max.parse().map_err(|_| Unexpected(&token, &location))?
-                            }
-                            _ => Err(Unexpected(&token, &location))?,
-                        },
-                    };
-                    self.parse_tokens(&[Token::RParen])?;
-                    ColumnType::Varchar(max)
-                }
-                _ => Err(Unexpected(&token, &location))?,
-            },
+        let TokenWithLocation(token, location) = self.next();
+        let ty = match token {
+            Token::Keyword(Keyword::Int) => ColumnType::Int,
+            Token::Keyword(Keyword::Varchar) => {
+                self.parse_tokens(&[Token::LParen])?;
+                let max: u16 = match self.next() {
+                    TokenWithLocation(token, location) => match token {
+                        Token::NumberLiteral(ref max) => {
+                            max.parse().map_err(|_| Unexpected(&token, &location))?
+                        }
+                        _ => Err(Unexpected(&token, &location))?,
+                    },
+                };
+                self.parse_tokens(&[Token::RParen])?;
+                ColumnType::Varchar(max)
+            }
+            _ => Err(Unexpected(&token, &location))?,
         };
 
         Ok(ColumnDef { ty, name })
