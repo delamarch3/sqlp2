@@ -1,6 +1,6 @@
 use std::{iter::Peekable, str::Chars};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Token {
     Eof,
 
@@ -28,7 +28,7 @@ pub(crate) enum Token {
     Dot,
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default, Clone, Copy)]
 pub(crate) struct Location {
     line: u64,
     col: u64,
@@ -49,7 +49,7 @@ pub(crate) struct Word {
     keyword: Keyword,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum Keyword {
     Int,
     Varchar,

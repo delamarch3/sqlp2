@@ -1,5 +1,6 @@
 use crate::tokeniser::{Keyword, Location, Token, TokenWithLocation, Tokeniser, TokeniserError};
 
+#[derive(PartialEq, Debug)]
 pub enum Statement {
     Select(Select),
     Insert(Insert),
@@ -8,14 +9,34 @@ pub enum Statement {
     Create(Create),
 }
 
+#[derive(PartialEq, Debug)]
 pub struct Select {}
+#[derive(PartialEq, Debug)]
 pub struct Insert {}
+#[derive(PartialEq, Debug)]
 pub struct Update {}
+#[derive(PartialEq, Debug)]
 pub struct Delete {}
+#[derive(PartialEq, Debug)]
 pub struct Create {
-    table_name: String,
+    name: String,
+    columns: Vec<ColumnDef>,
 }
 
+#[derive(PartialEq, Debug)]
+enum ColumnType {
+    Int,
+    Varchar(u16),
+}
+
+#[derive(PartialEq, Debug)]
+struct ColumnDef {
+    ty: ColumnType,
+    name: String,
+    // TODO: constraints
+}
+
+#[derive(Debug)]
 pub enum ParserError {
     TokeniserError(String),
     Unexpected(String),
@@ -93,22 +114,67 @@ impl Parser {
     fn parse_create(&mut self) -> Result<Create> {
         self.parse_keywords(&[Keyword::Create, Keyword::Table])?;
 
-        let TokenWithLocation(token, location) = self.next();
-        let table_name = match token {
-            Token::Ident(name) => name,
-            _ => Err(Unexpected(&token, &location))?,
+        let name = match self.next() {
+            TokenWithLocation(token, location) => match token {
+                Token::Ident(name) => name,
+                _ => Err(Unexpected(&token, &location))?,
+            },
         };
 
         self.parse_tokens(&[Token::LParen])?;
+        let mut columns = Vec::new();
+        while {
+            columns.push(self.parse_column_def()?);
+            self.check_token(Token::Comma)
+        } {}
+        self.parse_tokens(&[Token::RParen])?;
 
-        // TODO: Parse column defs
+        Ok(Create { name, columns })
+    }
 
-        Ok(Create { table_name })
+    fn parse_column_def(&mut self) -> Result<ColumnDef> {
+        let name = match self.next() {
+            TokenWithLocation(token, location) => match token {
+                Token::Ident(name) => name,
+                _ => Err(Unexpected(&token, &location))?,
+            },
+        };
+
+        let ty = match self.next() {
+            TokenWithLocation(token, location) => match token {
+                Token::Keyword(Keyword::Int) => ColumnType::Int,
+                Token::Keyword(Keyword::Varchar) => {
+                    self.parse_tokens(&[Token::LParen])?;
+                    let max: u16 = match self.next() {
+                        TokenWithLocation(token, location) => match token {
+                            Token::NumberLiteral(ref max) => {
+                                max.parse().map_err(|_| Unexpected(&token, &location))?
+                            }
+                            _ => Err(Unexpected(&token, &location))?,
+                        },
+                    };
+                    self.parse_tokens(&[Token::RParen])?;
+                    ColumnType::Varchar(max)
+                }
+                _ => Err(Unexpected(&token, &location))?,
+            },
+        };
+
+        Ok(ColumnDef { ty, name })
+    }
+
+    fn check_token(&mut self, want: Token) -> bool {
+        match self.peek() {
+            TokenWithLocation(have, ..) if want == have => {
+                self.next();
+                true
+            }
+            _ => false,
+        }
     }
 
     fn parse_keywords(&mut self, keywords: &[Keyword]) -> Result<()> {
         for want in keywords {
-            let TokenWithLocation(token, location) = self.next();
             match self.next() {
                 TokenWithLocation(Token::Keyword(have), ..) if want == &have => continue,
                 TokenWithLocation(token, location) => Err(Unexpected(&token, &location))?,
@@ -121,7 +187,7 @@ impl Parser {
     fn parse_tokens(&mut self, tokens: &[Token]) -> Result<()> {
         for want in tokens {
             match self.next() {
-                TokenWithLocation(have, location) if want == &have => continue,
+                TokenWithLocation(have, ..) if want == &have => continue,
                 TokenWithLocation(token, location) => Err(Unexpected(&token, &location))?,
             }
         }
@@ -147,5 +213,30 @@ impl Parser {
             .get(i)
             .map(|t| t.clone())
             .unwrap_or(TokenWithLocation(Token::Eof, Default::default()))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{ColumnDef, ColumnType, Create, Parser, Statement};
+
+    #[test]
+    fn test_create_statement() {
+        let input = "
+            CREATE TABLE t1 (
+                c1 INT,
+                c2 VARCHAR(1024)
+            )";
+
+        let want = vec![Statement::Create(Create {
+            name: "t1".into(),
+            columns: vec![
+                ColumnDef { ty: ColumnType::Int, name: "c1".into() },
+                ColumnDef { ty: ColumnType::Varchar(1024), name: "c2".into() },
+            ],
+        })];
+
+        let have = Parser::new(input).unwrap().parse().unwrap();
+        assert_eq!(want, have)
     }
 }
