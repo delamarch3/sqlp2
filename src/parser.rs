@@ -114,11 +114,10 @@ impl Parser {
     fn parse_create(&mut self) -> Result<Create> {
         self.parse_keywords(&[Keyword::Create, Keyword::Table])?;
 
-        let name = match self.next() {
-            TokenWithLocation(token, location) => match token {
-                Token::Ident(name) => name,
-                _ => Err(Unexpected(&token, &location))?,
-            },
+        let TokenWithLocation(token, location) = self.next();
+        let name = match token {
+            Token::Ident(name) => name,
+            _ => Err(Unexpected(&token, &location))?,
         };
 
         self.parse_tokens(&[Token::LParen])?;
@@ -144,13 +143,12 @@ impl Parser {
             Token::Keyword(Keyword::Int) => ColumnType::Int,
             Token::Keyword(Keyword::Varchar) => {
                 self.parse_tokens(&[Token::LParen])?;
-                let max: u16 = match self.next() {
-                    TokenWithLocation(token, location) => match token {
-                        Token::NumberLiteral(ref max) => {
-                            max.parse().map_err(|_| Unexpected(&token, &location))?
-                        }
-                        _ => Err(Unexpected(&token, &location))?,
-                    },
+                let TokenWithLocation(token, location) = self.next();
+                let max = match token {
+                    Token::NumberLiteral(ref max) => {
+                        max.parse().map_err(|_| Unexpected(&token, &location))?
+                    }
+                    _ => Err(Unexpected(&token, &location))?,
                 };
                 self.parse_tokens(&[Token::RParen])?;
                 ColumnType::Varchar(max)
@@ -173,9 +171,10 @@ impl Parser {
 
     fn parse_keywords(&mut self, keywords: &[Keyword]) -> Result<()> {
         for want in keywords {
-            match self.next() {
-                TokenWithLocation(Token::Keyword(have), ..) if want == &have => continue,
-                TokenWithLocation(token, location) => Err(Unexpected(&token, &location))?,
+            let TokenWithLocation(token, location) = self.next();
+            match token {
+                Token::Keyword(ref have) if want == have => continue,
+                _ => Err(Unexpected(&token, &location))?,
             }
         }
 
@@ -184,10 +183,12 @@ impl Parser {
 
     fn parse_tokens(&mut self, tokens: &[Token]) -> Result<()> {
         for want in tokens {
-            match self.next() {
-                TokenWithLocation(have, ..) if want == &have => continue,
-                TokenWithLocation(token, location) => Err(Unexpected(&token, &location))?,
+            let TokenWithLocation(ref have, location) = self.next();
+            if want == have {
+                continue;
             }
+
+            Err(Unexpected(&have, &location))?;
         }
 
         Ok(())
