@@ -270,7 +270,6 @@ impl<'a> Tokeniser<'a> {
                 ',' => self.consume(Token::Comma),
                 ';' => self.consume(Token::Semicolon),
                 '*' => self.consume(Token::Asterisk),
-                // TODO: two different conditons 🤔
                 ch if ch.is_ascii_lowercase() || ch.is_ascii_uppercase() || ch == '_' => {
                     // identifier or keyword:
 
@@ -316,19 +315,17 @@ impl<'a> Tokeniser<'a> {
     fn skip_line(&mut self) -> bool {
         loop {
             match self.peek_char() {
-                Some(c) => {
-                    if *c == '\n' {
+                Some(&c) => {
+                    self.next_char();
+                    if c == '\n' {
                         break;
                     }
-
-                    self.next_char();
                     continue;
                 }
                 None => return false,
             }
         }
 
-        self.next_char();
         self.peek_char().is_some()
     }
 

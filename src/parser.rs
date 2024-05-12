@@ -10,13 +10,81 @@ pub enum Statement {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct Select {}
+enum Value {
+    Number(String),
+    String(String),
+    Bool(bool),
+    Null,
+}
+
+#[derive(PartialEq, Debug)]
+enum Op {
+    Eq,
+    Neq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+}
+
+#[derive(PartialEq, Debug)]
+enum Expr {
+    Ident(String),
+    CompoundIdent(String),
+    Wildcard,
+    QualifiedWildcard(Vec<String>),
+    Value(Value),
+    IsNull(Box<Expr>),
+    IsNotNull(Box<Expr>),
+    InList { expr: Box<Expr>, list: Vec<Expr>, negated: bool },
+    Between { expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr> },
+    BinaryOp { left: Box<Expr>, op: Op, right: Box<Expr> },
+    // TODO: Functions
+    // TODO: subquery
+}
+
+#[derive(PartialEq, Debug)]
+enum FromTable {
+    Table { name: Vec<String>, alias: Option<String> },
+    Derived { alias: Option<String>, select: Box<Select> },
+}
+
+#[derive(PartialEq, Debug)]
+struct OrderByExpr {
+    expr: Expr,
+    desc: bool, // Default is false/ASC
+}
+
+#[derive(PartialEq, Debug)]
+enum SelectItem {
+    Expr(Expr),
+    AliasedExpr { expr: Expr, alias: String },
+    QualifiedWildcard(Vec<String>),
+    Wildcard,
+}
+
+#[derive(PartialEq, Debug)]
+pub struct Select {
+    projection: Vec<SelectItem>,
+    from: FromTable,
+    joins: Vec<Select>,
+    filter: Option<Expr>,
+    group: Vec<Expr>,
+    order: OrderByExpr,
+    limit: Expr,
+}
+
 #[derive(PartialEq, Debug)]
 pub struct Insert {}
+
 #[derive(PartialEq, Debug)]
 pub struct Update {}
+
 #[derive(PartialEq, Debug)]
 pub struct Delete {}
+
 #[derive(PartialEq, Debug)]
 pub struct Create {
     name: String,
@@ -96,7 +164,39 @@ impl Parser {
     }
 
     fn parse_select(&mut self) -> Result<Select> {
-        Ok(Select {})
+        self.parse_keywords(&[Keyword::Select])?;
+
+        let projection = self.parse_projection();
+
+        self.parse_keywords(&[Keyword::From])?;
+
+        // parse table and joins
+
+        if self.check_keywords(&[Keyword::Where]) {
+            // parse filter
+        };
+
+        if self.check_keywords(&[Keyword::Group, Keyword::By]) {
+            // parse group
+        }
+
+        if self.check_keywords(&[Keyword::Order, Keyword::By]) {
+            // parse order
+        }
+
+        if self.check_keywords(&[Keyword::Limit]) {
+            // parse limit
+        }
+
+        Ok(Select {
+            projection: todo!(),
+            from: todo!(),
+            joins: todo!(),
+            filter: todo!(),
+            group: todo!(),
+            order: todo!(),
+            limit: todo!(),
+        })
     }
 
     fn parse_insert(&mut self) -> Result<Insert> {
@@ -124,7 +224,7 @@ impl Parser {
         let mut columns = Vec::new();
         while {
             columns.push(self.parse_column_def()?);
-            self.check_token(Token::Comma)
+            self.check_tokens(&[Token::Comma])
         } {}
         self.parse_tokens(&[Token::RParen])?;
 
@@ -159,14 +259,152 @@ impl Parser {
         Ok(ColumnDef { ty, name })
     }
 
-    fn check_token(&mut self, want: Token) -> bool {
-        match self.peek() {
-            TokenWithLocation(have, ..) if want == have => {
-                self.next();
-                true
+    fn parse_projection(&mut self) -> Result<Vec<SelectItem>> {
+        let mut items = Vec::new();
+        while {
+            items.push(self.parse_select_item()?);
+            self.check_tokens(&[Token::Comma])
+        } {}
+
+        Ok(items)
+    }
+
+    fn parse_select_item(&mut self) -> Result<SelectItem> {
+        // Try parse wildcard or qualified wildcard
+        // Parse expr and optional alias
+        let index = self.index;
+        let TokenWithLocation(token, _) = self.next();
+        match token {
+            Token::Asterisk => return Ok(SelectItem::Wildcard),
+            Token::Ident(a) => {
+                // Try to parse a qualified ident, else reset index and parse_expr
+                let mut parts = Vec::with_capacity(2);
+                if self.check_tokens(&[Token::Dot]) {
+                    parts.push(a);
+
+                    let TokenWithLocation(b, location) = self.next();
+                    match b {
+                        Token::Ident(b) => parts.push(b),
+                        Token::Asterisk => return Ok(SelectItem::QualifiedWildcard(parts)),
+                        _ => Err(Unexpected(&b, &location))?,
+                    };
+
+                    if self.check_tokens(&[Token::Dot]) {
+                        let TokenWithLocation(c, location) = self.next();
+                        match c {
+                            Token::Ident(_) => {}
+                            Token::Asterisk => return Ok(SelectItem::QualifiedWildcard(parts)),
+                            _ => Err(Unexpected(&c, &location))?,
+                        };
+                    }
+                }
             }
-            _ => false,
+            _ => {}
+        };
+
+        self.index = index;
+        let expr = self.parse_expr(0)?;
+        if self.check_keywords(&[Keyword::As]) {
+            let TokenWithLocation(token, location) = self.next();
+            match token {
+                Token::Ident(alias) => return Ok(SelectItem::AliasedExpr { expr, alias }),
+                _ => Err(Unexpected(&token, &location))?,
+            };
+        };
+
+        Ok(SelectItem::Expr(expr))
+    }
+
+    fn parse_expr(&mut self, prec: u8) -> Result<Expr> {
+        let mut expr = self.parse_prefix()?;
+        loop {
+            let next_prec = self.next_prec();
+            if prec >= next_prec {
+                break;
+            }
+
+            expr = self.parse_infix()?;
         }
+
+        Ok(expr)
+    }
+
+    fn parse_prefix(&mut self) -> Result<Expr> {
+        let TokenWithLocation(token, location) = self.next();
+        match token {
+            Token::Keyword(Keyword::False) => {}
+            Token::Keyword(Keyword::True) => {}
+            Token::Keyword(Keyword::Null) => {}
+            Token::Ident(s) => {
+                // try to parse compound
+                // wildcard unexpected
+            }
+            Token::StringLiteral(s) => {}
+            Token::NumberLiteral(n) => {}
+
+            _ => Err(Unexpected(&token, &location))?,
+        };
+
+        todo!()
+    }
+
+    fn parse_infix(&mut self) -> Result<Expr> {
+        let TokenWithLocation(token, location) = self.next();
+        match token {
+            Token::Keyword(_) => todo!(),
+
+            Token::Eq => todo!(),
+            Token::Neq => todo!(),
+            Token::Lt => todo!(),
+            Token::Le => todo!(),
+            Token::Gt => todo!(),
+            Token::Ge => todo!(),
+
+            _ => todo!(),
+        }
+    }
+
+    fn next_prec(&self) -> u8 {
+        todo!()
+    }
+
+    // Will advance and return true if tokens match, otherwise walk back and return false
+    fn check_tokens(&mut self, tokens: &[Token]) -> bool {
+        let index = self.index;
+
+        for want in tokens {
+            match self.peek() {
+                TokenWithLocation(ref have, ..) if want == have => {
+                    self.next();
+                    continue;
+                }
+                _ => {
+                    self.index = index;
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn check_keywords(&mut self, keywords: &[Keyword]) -> bool {
+        let index = self.index;
+
+        for want in keywords {
+            match self.peek() {
+                TokenWithLocation(Token::Keyword(ref have), ..) if want == have => {
+                    self.next();
+                    continue;
+                }
+                _ => {
+                    self.index = index;
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 
     fn parse_keywords(&mut self, keywords: &[Keyword]) -> Result<()> {
@@ -217,7 +455,7 @@ impl Parser {
 
 #[cfg(test)]
 mod test {
-    use super::{ColumnDef, ColumnType, Create, Parser, Statement};
+    use super::{ColumnDef, ColumnType, Create, Parser, SelectItem, Statement};
 
     #[test]
     fn test_create_statement() {
@@ -236,6 +474,15 @@ mod test {
         })];
 
         let have = Parser::new(input).unwrap().parse().unwrap();
+        assert_eq!(want, have)
+    }
+
+    #[test]
+    fn test_parse_projection() {
+        let input = "t1.*, *";
+
+        let want = vec![SelectItem::QualifiedWildcard(vec!["t1".into()]), SelectItem::Wildcard];
+        let have = Parser::new(input).unwrap().parse_projection().unwrap();
         assert_eq!(want, have)
     }
 }
