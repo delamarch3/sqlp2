@@ -41,7 +41,8 @@ enum Expr {
     InList { expr: Box<Expr>, list: Vec<Expr>, negated: bool },
     Between { expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr> },
     BinaryOp { left: Box<Expr>, op: Op, right: Box<Expr> },
-    // TODO: Functions
+    // TODO: UnaryOp
+    // TODO: functions
     // TODO: subquery
 }
 
@@ -318,54 +319,146 @@ impl Parser {
     fn parse_expr(&mut self, prec: u8) -> Result<Expr> {
         let mut expr = self.parse_prefix()?;
         loop {
-            let next_prec = self.next_prec();
+            let next_prec = self.next_prec()?;
             if prec >= next_prec {
                 break;
             }
-
-            expr = self.parse_infix()?;
+            expr = self.parse_infix(expr, next_prec)?;
         }
 
         Ok(expr)
     }
 
     fn parse_prefix(&mut self) -> Result<Expr> {
-        let TokenWithLocation(token, location) = self.next();
-        match token {
-            Token::Keyword(Keyword::False) => {}
-            Token::Keyword(Keyword::True) => {}
-            Token::Keyword(Keyword::Null) => {}
-            Token::Ident(s) => {
-                // try to parse compound
-                // wildcard unexpected
-            }
-            Token::StringLiteral(s) => {}
-            Token::NumberLiteral(n) => {}
+        let TokenWithLocation(token, location) = self.peek();
+        let expr = match token {
+            Token::Keyword(Keyword::False)
+            | Token::Keyword(Keyword::True)
+            | Token::Keyword(Keyword::Null)
+            | Token::StringLiteral(_)
+            | Token::NumberLiteral(_) => Expr::Value(self.parse_value()?),
 
+            Token::Ident(s) => {
+                // TODO: try to parse compound
+                // wildcard unexpected -> parse_select_item
+                self.next();
+                Expr::Ident(s)
+            }
+
+            Token::LParen => {
+                todo!()
+            }
+
+            // TODO: UnaryOp
             _ => Err(Unexpected(&token, &location))?,
         };
 
-        todo!()
+        Ok(expr)
     }
 
-    fn parse_infix(&mut self) -> Result<Expr> {
+    fn parse_infix(&mut self, expr: Expr, prec: u8) -> Result<Expr> {
+        let TokenWithLocation(token, location) = self.next();
+        let op = match token {
+            Token::Keyword(kw) => match kw {
+                Keyword::And => Some(Op::And),
+                Keyword::Or => Some(Op::Or),
+                _ => None,
+            },
+            Token::Eq => Some(Op::Eq),
+            Token::Neq => Some(Op::Neq),
+            Token::Lt => Some(Op::Lt),
+            Token::Le => Some(Op::Le),
+            Token::Gt => Some(Op::Gt),
+            Token::Ge => Some(Op::Ge),
+            _ => None,
+        };
+
+        if let Some(op) = op {
+            return Ok(Expr::BinaryOp {
+                left: Box::new(expr),
+                op,
+                right: Box::new(self.parse_expr(prec)?),
+            });
+        }
+
+        let expr = match token {
+            Token::Keyword(kw) => match kw {
+                Keyword::Is => {
+                    // [not] null, true, false
+                    todo!()
+                }
+                Keyword::Not | Keyword::Between | Keyword::In => {
+                    self.index -= 1;
+                    let negated = self.check_keywords(&[Keyword::Not]);
+                    if self.check_keywords(&[Keyword::Between]) {
+                        self.parse_between(expr, negated)?
+                    } else if self.check_keywords(&[Keyword::In]) {
+                        self.parse_in(expr, negated)?
+                    } else {
+                        // Should be the next token?
+                        Err(Unexpected(&token, &location))?
+                    }
+                }
+                _ => Err(Unexpected(&token, &location))?,
+            },
+            _ => Err(Unexpected(&token, &location))?,
+        };
+
+        Ok(expr)
+    }
+
+    fn next_prec(&self) -> Result<u8> {
+        let TokenWithLocation(token, _) = self.peek();
+        dbg!(&token);
+        let prec = match token {
+            Token::Eq | Token::Neq | Token::Lt | Token::Le | Token::Gt | Token::Ge => 20,
+            Token::Keyword(Keyword::And) => 10,
+            Token::Keyword(Keyword::Or) => 5,
+
+            Token::Keyword(Keyword::Not) => {
+                let TokenWithLocation(token, location) = self.peek_n(1);
+                match token {
+                    Token::Keyword(Keyword::Between) => 20,
+                    Token::Keyword(Keyword::In) => 20,
+                    _ => Err(Unexpected(&token, &location))?,
+                }
+            }
+            Token::Keyword(Keyword::Is) => 17,
+            Token::Keyword(Keyword::Between) => 20,
+            Token::Keyword(Keyword::In) => 20,
+            _ => 0,
+        };
+
+        Ok(prec)
+    }
+
+    fn parse_value(&mut self) -> Result<Value> {
         let TokenWithLocation(token, location) = self.next();
         match token {
-            Token::Keyword(_) => todo!(),
-
-            Token::Eq => todo!(),
-            Token::Neq => todo!(),
-            Token::Lt => todo!(),
-            Token::Le => todo!(),
-            Token::Gt => todo!(),
-            Token::Ge => todo!(),
-
-            _ => todo!(),
+            Token::Keyword(Keyword::False) => Ok(Value::Bool(false)),
+            Token::Keyword(Keyword::True) => Ok(Value::Bool(true)),
+            Token::Keyword(Keyword::Null) => Ok(Value::Null),
+            Token::StringLiteral(s) => Ok(Value::String(s)),
+            Token::NumberLiteral(n) => Ok(Value::Number(n)),
+            _ => Err(Unexpected(&token, &location))?,
         }
     }
 
-    fn next_prec(&self) -> u8 {
+    fn parse_between(&mut self, expr: Expr, negated: bool) -> Result<Expr> {
         todo!()
+    }
+
+    fn parse_in(&mut self, expr: Expr, negated: bool) -> Result<Expr> {
+        let mut list = Vec::new();
+
+        self.parse_tokens(&[Token::LParen])?;
+        while {
+            list.push(self.parse_expr(0)?);
+            self.check_tokens(&[Token::Comma])
+        } {}
+        self.parse_tokens(&[Token::RParen])?;
+
+        Ok(Expr::InList { expr: Box::new(expr), list, negated })
     }
 
     // Will advance and return true if tokens match, otherwise walk back and return false
@@ -455,7 +548,7 @@ impl Parser {
 
 #[cfg(test)]
 mod test {
-    use super::{ColumnDef, ColumnType, Create, Parser, SelectItem, Statement};
+    use super::{ColumnDef, ColumnType, Create, Expr, Op, Parser, SelectItem, Statement, Value};
 
     #[test]
     fn test_create_statement() {
@@ -483,6 +576,33 @@ mod test {
 
         let want = vec![SelectItem::QualifiedWildcard(vec!["t1".into()]), SelectItem::Wildcard];
         let have = Parser::new(input).unwrap().parse_projection().unwrap();
+        assert_eq!(want, have)
+    }
+
+    #[test]
+    fn test_parse_expr() {
+        let input = "c1 < 5 and c2 not in (1, \"2\", 3, \"4\")";
+
+        let want = Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(Expr::Ident("c1".into())),
+                op: Op::Lt,
+                right: Box::new(Expr::Value(Value::Number("5".into()))),
+            }),
+            op: Op::And,
+            right: Box::new(Expr::InList {
+                expr: Box::new(Expr::Ident("c2".into())),
+                list: vec![
+                    Expr::Value(Value::Number("1".into())),
+                    Expr::Value(Value::String("2".into())),
+                    Expr::Value(Value::Number("3".into())),
+                    Expr::Value(Value::String("4".into())),
+                ],
+                negated: true,
+            }),
+        };
+
+        let have = Parser::new(input).unwrap().parse_expr(0).unwrap();
         assert_eq!(want, have)
     }
 }
