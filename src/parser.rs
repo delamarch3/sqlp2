@@ -32,7 +32,7 @@ enum Op {
 #[derive(PartialEq, Debug)]
 enum Expr {
     Ident(String),
-    CompoundIdent(String),
+    CompoundIdent(Vec<String>),
     Wildcard,
     QualifiedWildcard(Vec<String>),
     Value(Value),
@@ -338,18 +338,40 @@ impl Parser {
             | Token::StringLiteral(_)
             | Token::NumberLiteral(_) => Expr::Value(self.parse_value()?),
 
-            Token::Ident(s) => {
-                // TODO: try to parse compound
-                // wildcard unexpected -> parse_select_item
+            Token::Ident(a) => {
                 self.next();
-                Expr::Ident(s)
+
+                let mut parts = Vec::with_capacity(2);
+                if self.check_tokens(&[Token::Dot]) {
+                    parts.push(a);
+
+                    let TokenWithLocation(b, location) = self.next();
+                    match b {
+                        Token::Ident(b) => parts.push(b),
+                        _ => Err(Unexpected(&b, &location))?,
+                    };
+
+                    if self.check_tokens(&[Token::Dot]) {
+                        let TokenWithLocation(c, location) = self.next();
+                        match c {
+                            Token::Ident(c) => parts.push(c),
+                            _ => Err(Unexpected(&c, &location))?,
+                        };
+                    }
+
+                    Expr::CompoundIdent(parts)
+                } else {
+                    Expr::Ident(a)
+                }
             }
 
             Token::LParen => {
-                todo!()
+                self.next();
+                let expr = self.parse_expr(0)?;
+                self.parse_tokens(&[Token::RParen])?;
+                expr
             }
 
-            // TODO: UnaryOp
             _ => Err(Unexpected(&token, &location))?,
         };
 
@@ -409,7 +431,6 @@ impl Parser {
 
     fn next_prec(&self) -> Result<u8> {
         let TokenWithLocation(token, _) = self.peek();
-        dbg!(&token);
         let prec = match token {
             Token::Eq | Token::Neq | Token::Lt | Token::Le | Token::Gt | Token::Ge => 20,
             Token::Keyword(Keyword::And) => 10,
@@ -445,7 +466,16 @@ impl Parser {
     }
 
     fn parse_between(&mut self, expr: Expr, negated: bool) -> Result<Expr> {
-        todo!()
+        let low = self.parse_expr(20)?;
+        self.parse_keywords(&[Keyword::And])?;
+        let high = self.parse_expr(20)?;
+
+        Ok(Expr::Between {
+            expr: Box::new(expr),
+            negated,
+            low: Box::new(low),
+            high: Box::new(high),
+        })
     }
 
     fn parse_in(&mut self, expr: Expr, negated: bool) -> Result<Expr> {
@@ -572,18 +602,65 @@ mod test {
 
     #[test]
     fn test_parse_projection() {
-        let input = "t1.*, *";
+        let input = "t1.*, *, s1.t1.c1";
 
-        let want = vec![SelectItem::QualifiedWildcard(vec!["t1".into()]), SelectItem::Wildcard];
+        let want = vec![
+            SelectItem::QualifiedWildcard(vec!["t1".into()]),
+            SelectItem::Wildcard,
+            SelectItem::Expr(Expr::CompoundIdent(vec!["s1".into(), "t1".into(), "c1".into()])),
+        ];
         let have = Parser::new(input).unwrap().parse_projection().unwrap();
         assert_eq!(want, have)
     }
 
-    #[test]
-    fn test_parse_expr() {
-        let input = "c1 < 5 and c2 not in (1, \"2\", 3, \"4\")";
+    macro_rules! test_parse_expr {
+        ($name:tt, $input:expr, $want:expr) => {
+            #[test]
+            fn $name() {
+                let mut parser = Parser::new($input).unwrap();
+                let have = parser.parse_expr(0).unwrap();
+                assert_eq!($want, have);
+            }
+        };
+    }
 
-        let want = Expr::BinaryOp {
+    test_parse_expr!(
+        test_expr_binary_op,
+        "c1 < 5",
+        Expr::BinaryOp {
+            left: Box::new(Expr::Ident("c1".into())),
+            op: Op::Lt,
+            right: Box::new(Expr::Value(Value::Number("5".into()))),
+        }
+    );
+
+    test_parse_expr!(
+        test_expr_binary_op_in,
+        "c1 < 5 and c2 in (1, \"2\", 3, \"4\")",
+        Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(Expr::Ident("c1".into())),
+                op: Op::Lt,
+                right: Box::new(Expr::Value(Value::Number("5".into()))),
+            }),
+            op: Op::And,
+            right: Box::new(Expr::InList {
+                expr: Box::new(Expr::Ident("c2".into())),
+                list: vec![
+                    Expr::Value(Value::Number("1".into())),
+                    Expr::Value(Value::String("2".into())),
+                    Expr::Value(Value::Number("3".into())),
+                    Expr::Value(Value::String("4".into())),
+                ],
+                negated: false,
+            }),
+        }
+    );
+
+    test_parse_expr!(
+        test_expr_binary_op_not_in,
+        "c1 < 5 and c2 not in (1, \"2\", 3, \"4\")",
+        Expr::BinaryOp {
             left: Box::new(Expr::BinaryOp {
                 left: Box::new(Expr::Ident("c1".into())),
                 op: Op::Lt,
@@ -600,9 +677,87 @@ mod test {
                 ],
                 negated: true,
             }),
-        };
+        }
+    );
 
-        let have = Parser::new(input).unwrap().parse_expr(0).unwrap();
-        assert_eq!(want, have)
-    }
+    test_parse_expr!(
+        test_expr_binary_op_not_in_parens,
+        "(c1 < 5) and (c2 not in (1, \"2\", 3, \"4\"))",
+        Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(Expr::Ident("c1".into())),
+                op: Op::Lt,
+                right: Box::new(Expr::Value(Value::Number("5".into()))),
+            }),
+            op: Op::And,
+            right: Box::new(Expr::InList {
+                expr: Box::new(Expr::Ident("c2".into())),
+                list: vec![
+                    Expr::Value(Value::Number("1".into())),
+                    Expr::Value(Value::String("2".into())),
+                    Expr::Value(Value::Number("3".into())),
+                    Expr::Value(Value::String("4".into())),
+                ],
+                negated: true,
+            }),
+        }
+    );
+
+    test_parse_expr!(
+        test_expr_parens,
+        "c1 < (5 < c2) AND (c1 < 5) < c2",
+        Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(Expr::Ident("c1".into())),
+                op: Op::Lt,
+                right: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Value(Value::Number("5".into()))),
+                    op: Op::Lt,
+                    right: Box::new(Expr::Ident("c2".into()))
+                })
+            }),
+            op: Op::And,
+            right: Box::new(Expr::BinaryOp {
+                left: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Ident("c1".into())),
+                    op: Op::Lt,
+                    right: Box::new(Expr::Value(Value::Number("5".into())))
+                }),
+                op: Op::Lt,
+                right: Box::new(Expr::Ident("c2".into()))
+            })
+        }
+    );
+
+    test_parse_expr!(
+        test_expr_between,
+        "c1 between 0 and 200",
+        Expr::Between {
+            expr: Box::new(Expr::Ident("c1".into())),
+            negated: false,
+            low: Box::new(Expr::Value(Value::Number("0".into()))),
+            high: Box::new(Expr::Value(Value::Number("200".into()))),
+        }
+    );
+
+    test_parse_expr!(
+        test_expr_not_between,
+        "c1 not between 0 and 200",
+        Expr::Between {
+            expr: Box::new(Expr::Ident("c1".into())),
+            negated: true,
+            low: Box::new(Expr::Value(Value::Number("0".into()))),
+            high: Box::new(Expr::Value(Value::Number("200".into()))),
+        }
+    );
+
+    test_parse_expr!(
+        test_expr_compound_ident,
+        "s1.t1.c1 > 5",
+        Expr::BinaryOp {
+            left: Box::new(Expr::CompoundIdent(vec!["s1".into(), "t1".into(), "c1".into()])),
+            op: Op::Gt,
+            right: Box::new(Expr::Value(Value::Number("5".into()))),
+        }
+    );
 }
