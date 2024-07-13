@@ -49,7 +49,26 @@ enum Expr {
 #[derive(PartialEq, Debug)]
 enum FromTable {
     Table { name: Vec<String>, alias: Option<String> },
-    Derived { alias: Option<String>, select: Box<Select> },
+    Derived { select: Box<Select>, alias: Option<String> },
+}
+
+#[derive(PartialEq, Debug)]
+enum JoinConstraint {
+    On(Expr),
+    Using(Vec<String>),
+}
+
+#[derive(PartialEq, Debug)]
+enum JoinType {
+    Inner,
+    // TODO
+}
+
+#[derive(PartialEq, Debug)]
+struct Join {
+    from: FromTable,
+    ty: JoinType,
+    constraint: JoinConstraint,
 }
 
 #[derive(PartialEq, Debug)]
@@ -70,7 +89,7 @@ enum SelectItem {
 pub struct Select {
     projection: Vec<SelectItem>,
     from: FromTable,
-    joins: Vec<Select>,
+    joins: Vec<Join>,
     filter: Option<Expr>,
     group: Vec<Expr>,
     order: OrderByExpr,
@@ -143,21 +162,19 @@ impl Parser {
     pub fn parse(&mut self) -> Result<Vec<Statement>> {
         let mut statements = Vec::new();
         loop {
-            statements.push({
-                let TokenWithLocation(token, location) = self.peek();
-                match token {
-                    Token::Keyword(kw) => match kw {
-                        Keyword::Select => Statement::Select(self.parse_select()?),
-                        Keyword::Insert => Statement::Insert(self.parse_insert()?),
-                        Keyword::Update => Statement::Update(self.parse_update()?),
-                        Keyword::Delete => Statement::Delete(self.parse_delete()?),
-                        Keyword::Create => Statement::Create(self.parse_create()?),
-                        _ => Err(Unexpected(&token, &location))?,
-                    },
-                    Token::Semicolon => continue,
-                    Token::Eof => break,
+            let TokenWithLocation(token, location) = self.peek();
+            statements.push(match token {
+                Token::Keyword(kw) => match kw {
+                    Keyword::Select => Statement::Select(self.parse_select()?),
+                    Keyword::Insert => Statement::Insert(self.parse_insert()?),
+                    Keyword::Update => Statement::Update(self.parse_update()?),
+                    Keyword::Delete => Statement::Delete(self.parse_delete()?),
+                    Keyword::Create => Statement::Create(self.parse_create()?),
                     _ => Err(Unexpected(&token, &location))?,
-                }
+                },
+                Token::Semicolon => continue,
+                Token::Eof => break,
+                _ => Err(Unexpected(&token, &location))?,
             });
         }
 
@@ -167,15 +184,14 @@ impl Parser {
     fn parse_select(&mut self) -> Result<Select> {
         self.parse_keywords(&[Keyword::Select])?;
 
-        let projection = self.parse_projection();
+        let projection = self.parse_projection()?;
 
         self.parse_keywords(&[Keyword::From])?;
+        let from = self.parse_from()?;
+        let joins = self.parse_joins()?;
 
-        // parse table and joins
-
-        if self.check_keywords(&[Keyword::Where]) {
-            // parse filter
-        };
+        let filter =
+            if self.check_keywords(&[Keyword::Where]) { Some(self.parse_expr(0)?) } else { None };
 
         if self.check_keywords(&[Keyword::Group, Keyword::By]) {
             // parse group
@@ -190,14 +206,86 @@ impl Parser {
         }
 
         Ok(Select {
-            projection: todo!(),
-            from: todo!(),
-            joins: todo!(),
-            filter: todo!(),
+            projection,
+            from,
+            joins,
+            filter,
             group: todo!(),
             order: todo!(),
             limit: todo!(),
         })
+    }
+
+    fn parse_from(&mut self) -> Result<FromTable> {
+        let TokenWithLocation(token, location) = self.next();
+        let from = match token {
+            Token::Ident(a) => {
+                let mut name = vec![a];
+                if self.check_tokens(&[Token::Dot]) {
+                    let TokenWithLocation(token, location) = self.next();
+                    match token {
+                        Token::Ident(b) => name.push(b),
+                        _ => Err(Unexpected(&token, &location))?,
+                    }
+                }
+
+                let mut alias = None;
+                if self.check_keywords(&[Keyword::As]) {
+                    let TokenWithLocation(token, location) = self.next();
+                    match token {
+                        Token::Ident(a) => alias = Some(a),
+                        _ => Err(Unexpected(&token, &location))?,
+                    }
+                }
+
+                FromTable::Table { name, alias }
+            }
+            Token::LParen => {
+                todo!("derived")
+            }
+            _ => Err(Unexpected(&token, &location))?,
+        };
+
+        Ok(from)
+    }
+
+    fn parse_joins(&mut self) -> Result<Vec<Join>> {
+        let mut joins = Vec::new();
+
+        if !self.check_keywords(&[Keyword::Join]) {
+            return Ok(joins);
+        }
+
+        while {
+            let from = self.parse_from()?;
+            if self.check_keywords(&[Keyword::On]) {
+                let constraint = JoinConstraint::On(self.parse_expr(0)?);
+                let ty = JoinType::Inner;
+                joins.push(Join { from, ty, constraint })
+            } else if self.check_keywords(&[Keyword::Using]) {
+                let mut columns = Vec::new();
+
+                self.parse_tokens(&[Token::LParen])?;
+                while {
+                    let TokenWithLocation(token, location) = self.next();
+                    match token {
+                        Token::Ident(a) => columns.push(a), //  TODO: parse properly
+                        _ => Err(Unexpected(&token, &location))?,
+                    };
+
+                    self.check_tokens(&[Token::Comma])
+                } {}
+                self.parse_tokens(&[Token::RParen])?;
+
+                let constraint = JoinConstraint::Using(columns);
+                let ty = JoinType::Inner;
+                joins.push(Join { from, ty, constraint })
+            }
+
+            self.check_keywords(&[Keyword::Join])
+        } {}
+
+        Ok(joins)
     }
 
     fn parse_insert(&mut self) -> Result<Insert> {
@@ -578,6 +666,8 @@ impl Parser {
 
 #[cfg(test)]
 mod test {
+    use crate::parser::{FromTable, Join, JoinConstraint, JoinType};
+
     use super::{ColumnDef, ColumnType, Create, Expr, Op, Parser, SelectItem, Statement, Value};
 
     #[test]
@@ -760,4 +850,37 @@ mod test {
             right: Box::new(Expr::Value(Value::Number("5".into()))),
         }
     );
+
+    #[test]
+    fn test_parse_from() {
+        let input = "table1 as t1";
+
+        let want = FromTable::Table { name: vec!["table1".into()], alias: Some("t1".into()) };
+        let have = Parser::new(input).unwrap().parse_from().unwrap();
+        assert_eq!(want, have)
+    }
+
+    #[test]
+    fn test_parse_join() {
+        let input = "join t2 on t1.c1 = t2.c1 join t3 using (c2, c3)";
+
+        let want = vec![
+            Join {
+                from: FromTable::Table { name: vec!["t2".into()], alias: None },
+                ty: JoinType::Inner,
+                constraint: JoinConstraint::On(Expr::BinaryOp {
+                    left: Box::new(Expr::CompoundIdent(vec!["t1".into(), "c1".into()])),
+                    op: Op::Eq,
+                    right: Box::new(Expr::CompoundIdent(vec!["t2".into(), "c1".into()])),
+                }),
+            },
+            Join {
+                from: FromTable::Table { name: vec!["t3".into()], alias: None },
+                ty: JoinType::Inner,
+                constraint: JoinConstraint::Using(vec!["c2".into(), "c3".into()]),
+            },
+        ];
+        let have = Parser::new(input).unwrap().parse_joins().unwrap();
+        assert_eq!(want, have)
+    }
 }
