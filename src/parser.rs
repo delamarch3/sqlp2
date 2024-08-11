@@ -41,15 +41,24 @@ enum Expr {
     InList { expr: Box<Expr>, list: Vec<Expr>, negated: bool },
     Between { expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr> },
     BinaryOp { left: Box<Expr>, op: Op, right: Box<Expr> },
+    SubQuery(Box<Query>),
     // TODO: UnaryOp
     // TODO: functions
-    // TODO: subquery
+}
+
+#[derive(PartialEq, Debug)]
+struct Query {
+    projection: Vec<SelectItem>,
+    from: FromTable,
+    joins: Vec<Join>,
+    filter: Option<Expr>,
+    group: Vec<Expr>,
 }
 
 #[derive(PartialEq, Debug)]
 enum FromTable {
     Table { name: Vec<String>, alias: Option<String> },
-    Derived { select: Box<Select>, alias: Option<String> },
+    Derived { query: Box<Query>, alias: Option<String> },
 }
 
 #[derive(PartialEq, Debug)]
@@ -87,11 +96,7 @@ enum SelectItem {
 
 #[derive(PartialEq, Debug)]
 pub struct Select {
-    projection: Vec<SelectItem>,
-    from: FromTable,
-    joins: Vec<Join>,
-    filter: Option<Expr>,
-    group: Vec<Expr>,
+    body: Query,
     order: OrderByExpr,
     limit: Expr,
 }
@@ -182,6 +187,20 @@ impl Parser {
     }
 
     fn parse_select(&mut self) -> Result<Select> {
+        let body = self.parse_query()?;
+
+        if self.check_keywords(&[Keyword::Order, Keyword::By]) {
+            // parse order
+        }
+
+        if self.check_keywords(&[Keyword::Limit]) {
+            // parse limit
+        }
+
+        Ok(Select { body, order: todo!(), limit: todo!() })
+    }
+
+    fn parse_query(&mut self) -> Result<Query> {
         self.parse_keywords(&[Keyword::Select])?;
 
         let projection = self.parse_projection()?;
@@ -193,27 +212,14 @@ impl Parser {
         let filter =
             if self.check_keywords(&[Keyword::Where]) { Some(self.parse_expr(0)?) } else { None };
 
-        if self.check_keywords(&[Keyword::Group, Keyword::By]) {
+        let group = if self.check_keywords(&[Keyword::Group, Keyword::By]) {
             // parse group
-        }
+            vec![]
+        } else {
+            vec![]
+        };
 
-        if self.check_keywords(&[Keyword::Order, Keyword::By]) {
-            // parse order
-        }
-
-        if self.check_keywords(&[Keyword::Limit]) {
-            // parse limit
-        }
-
-        Ok(Select {
-            projection,
-            from,
-            joins,
-            filter,
-            group: todo!(),
-            order: todo!(),
-            limit: todo!(),
-        })
+        Ok(Query { projection, from, joins, filter, group })
     }
 
     fn parse_from(&mut self) -> Result<FromTable> {
@@ -241,7 +247,17 @@ impl Parser {
                 FromTable::Table { name, alias }
             }
             Token::LParen => {
-                todo!("derived")
+                let query = self.parse_query().map(Box::new)?;
+                self.parse_tokens(&[Token::RParen])?;
+
+                let alias = if let TokenWithLocation(Token::Ident(alias), _) = self.peek() {
+                    self.next();
+                    Some(alias)
+                } else {
+                    None
+                };
+
+                FromTable::Derived { query, alias }
             }
             _ => Err(Unexpected(&token, &location))?,
         };
@@ -425,6 +441,8 @@ impl Parser {
             | Token::Keyword(Keyword::Null)
             | Token::StringLiteral(_)
             | Token::NumberLiteral(_) => Expr::Value(self.parse_value()?),
+
+            Token::Keyword(Keyword::Select) => Expr::SubQuery(self.parse_query().map(Box::new)?),
 
             Token::Ident(a) => {
                 self.next();
@@ -668,7 +686,9 @@ impl Parser {
 mod test {
     use crate::parser::{FromTable, Join, JoinConstraint, JoinType};
 
-    use super::{ColumnDef, ColumnType, Create, Expr, Op, Parser, SelectItem, Statement, Value};
+    use super::{
+        ColumnDef, ColumnType, Create, Expr, Op, Parser, Query, SelectItem, Statement, Value,
+    };
 
     #[test]
     fn test_create_statement() {
@@ -851,6 +871,30 @@ mod test {
         }
     );
 
+    test_parse_expr!(
+        test_expr_sub_query,
+        "1 < (select * from t1 join t2 using (c1) where t1.c2 > t2.c2)",
+        Expr::BinaryOp {
+            left: Box::new(Expr::Value(Value::Number("1".into()))),
+            op: Op::Lt,
+            right: Box::new(Expr::SubQuery(Box::new(Query {
+                projection: vec![SelectItem::Wildcard],
+                from: FromTable::Table { name: vec!["t1".into()], alias: None },
+                joins: vec![Join {
+                    from: FromTable::Table { name: vec!["t2".into()], alias: None },
+                    ty: JoinType::Inner,
+                    constraint: JoinConstraint::Using(vec!["c1".into()])
+                }],
+                filter: Some(Expr::BinaryOp {
+                    left: Box::new(Expr::CompoundIdent(vec!["t1".into(), "c2".into()])),
+                    op: Op::Gt,
+                    right: Box::new(Expr::CompoundIdent(vec!["t2".into(), "c2".into()]))
+                }),
+                group: vec![]
+            }))),
+        }
+    );
+
     #[test]
     fn test_parse_from() {
         let input = "table1 as t1";
@@ -880,6 +924,28 @@ mod test {
                 constraint: JoinConstraint::Using(vec!["c2".into(), "c3".into()]),
             },
         ];
+        let have = Parser::new(input).unwrap().parse_joins().unwrap();
+        assert_eq!(want, have)
+    }
+
+    #[test]
+    fn test_parse_with_derived() {
+        let input = "join (select * from t1) t1 using (c1)";
+
+        let want = vec![Join {
+            from: FromTable::Derived {
+                query: Box::new(Query {
+                    projection: vec![SelectItem::Wildcard],
+                    from: FromTable::Table { name: vec!["t1".into()], alias: None },
+                    joins: vec![],
+                    filter: None,
+                    group: vec![],
+                }),
+                alias: Some("t1".into()),
+            },
+            ty: JoinType::Inner,
+            constraint: JoinConstraint::Using(vec!["c1".into()]),
+        }];
         let have = Parser::new(input).unwrap().parse_joins().unwrap();
         assert_eq!(want, have)
     }
