@@ -29,10 +29,13 @@ enum Op {
     Or,
 }
 
+type Ident = String;
+type CompoundIdent = Vec<Ident>;
+
 #[derive(PartialEq, Debug)]
 enum Expr {
-    Ident(String),
-    CompoundIdent(Vec<String>),
+    Ident(Ident),
+    CompoundIdent(CompoundIdent),
     Wildcard,
     QualifiedWildcard(Vec<String>),
     Value(Value),
@@ -102,7 +105,10 @@ pub struct Select {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct Insert {}
+pub struct Insert {
+    table: CompoundIdent,
+    rows: Vec<Vec<Expr>>,
+}
 
 #[derive(PartialEq, Debug)]
 pub struct Update {}
@@ -190,11 +196,11 @@ impl Parser {
         let body = self.parse_query()?;
 
         if self.check_keywords(&[Keyword::Order, Keyword::By]) {
-            // parse order
+            todo!()
         }
 
         if self.check_keywords(&[Keyword::Limit]) {
-            // parse limit
+            todo!()
         }
 
         Ok(Select { body, order: todo!(), limit: todo!() })
@@ -207,17 +213,14 @@ impl Parser {
 
         self.parse_keywords(&[Keyword::From])?;
         let from = self.parse_from()?;
+
         let joins = self.parse_joins()?;
 
         let filter =
             if self.check_keywords(&[Keyword::Where]) { Some(self.parse_expr(0)?) } else { None };
 
-        let group = if self.check_keywords(&[Keyword::Group, Keyword::By]) {
-            // parse group
-            vec![]
-        } else {
-            vec![]
-        };
+        let group =
+            if self.check_keywords(&[Keyword::Group, Keyword::By]) { todo!() } else { vec![] };
 
         Ok(Query { projection, from, joins, filter, group })
     }
@@ -305,7 +308,57 @@ impl Parser {
     }
 
     fn parse_insert(&mut self) -> Result<Insert> {
-        Ok(Insert {})
+        self.parse_keywords(&[Keyword::Insert, Keyword::Into])?;
+
+        let TokenWithLocation(token, location) = self.peek();
+        let table = match token {
+            Token::Ident(a) => {
+                self.next();
+
+                let mut parts = Vec::with_capacity(2);
+                if self.check_tokens(&[Token::Dot]) {
+                    parts.push(a);
+
+                    let TokenWithLocation(b, location) = self.next();
+                    match b {
+                        Token::Ident(b) => parts.push(b),
+                        _ => Err(Unexpected(&b, &location))?,
+                    };
+
+                    if self.check_tokens(&[Token::Dot]) {
+                        let TokenWithLocation(c, location) = self.next();
+                        match c {
+                            Token::Ident(c) => parts.push(c),
+                            _ => Err(Unexpected(&c, &location))?,
+                        };
+                    }
+
+                    parts
+                } else {
+                    vec![a]
+                }
+            }
+            _ => Err(Unexpected(&token, &location))?,
+        };
+
+        self.parse_keywords(&[Keyword::Values])?;
+
+        self.parse_tokens(&[Token::LParen])?;
+        let mut rows = Vec::new();
+        while {
+            self.parse_tokens(&[Token::LParen])?;
+            let mut exprs = Vec::new();
+            while {
+                exprs.push(self.parse_expr(0)?);
+                self.check_tokens(&[Token::Comma])
+            } {}
+            rows.push(exprs);
+            self.parse_tokens(&[Token::RParen])?;
+            self.check_tokens(&[Token::Comma])
+        } {}
+        self.parse_tokens(&[Token::RParen])?;
+
+        Ok(Insert { table, rows })
     }
 
     fn parse_update(&mut self) -> Result<Update> {
@@ -687,7 +740,8 @@ mod test {
     use crate::parser::{FromTable, Join, JoinConstraint, JoinType};
 
     use super::{
-        ColumnDef, ColumnType, Create, Expr, Op, Parser, Query, SelectItem, Statement, Value,
+        ColumnDef, ColumnType, Create, Expr, Insert, Op, Parser, Query, SelectItem, Statement,
+        Value,
     };
 
     #[test]
@@ -947,6 +1001,28 @@ mod test {
             constraint: JoinConstraint::Using(vec!["c1".into()]),
         }];
         let have = Parser::new(input).unwrap().parse_joins().unwrap();
+        assert_eq!(want, have)
+    }
+
+    #[test]
+    fn test_parse_insert() {
+        let input = "insert into t1 values ((1, 2), (\"1\", \"2\"))";
+
+        let want = Insert {
+            table: vec!["t1".into()],
+            rows: vec![
+                vec![
+                    Expr::Value(Value::Number("1".into())),
+                    Expr::Value(Value::Number("2".into())),
+                ],
+                vec![
+                    Expr::Value(Value::String("1".into())),
+                    Expr::Value(Value::String("2".into())),
+                ],
+            ],
+        };
+        let have = Parser::new(input).unwrap().parse_insert().unwrap();
+
         assert_eq!(want, have)
     }
 }
