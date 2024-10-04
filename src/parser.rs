@@ -29,13 +29,15 @@ enum Op {
     Or,
 }
 
-type Ident = String;
-type CompoundIdent = Vec<Ident>;
+#[derive(PartialEq, Debug)]
+enum Ident {
+    Single(String),
+    Compound(Vec<String>),
+}
 
 #[derive(PartialEq, Debug)]
 enum Expr {
     Ident(Ident),
-    CompoundIdent(CompoundIdent),
     Wildcard,
     QualifiedWildcard(Vec<String>),
     Value(Value),
@@ -106,7 +108,7 @@ pub struct Select {
 
 #[derive(PartialEq, Debug)]
 pub struct Insert {
-    table: CompoundIdent,
+    table: Ident,
     rows: Vec<Vec<Expr>>,
 }
 
@@ -333,9 +335,9 @@ impl Parser {
                         };
                     }
 
-                    parts
+                    Ident::Compound(parts)
                 } else {
-                    vec![a]
+                    Ident::Single(a)
                 }
             }
             _ => Err(Unexpected(&token, &location))?,
@@ -518,9 +520,9 @@ impl Parser {
                         };
                     }
 
-                    Expr::CompoundIdent(parts)
+                    Expr::Ident(Ident::Compound(parts))
                 } else {
-                    Expr::Ident(a)
+                    Expr::Ident(Ident::Single(a))
                 }
             }
 
@@ -740,8 +742,8 @@ mod test {
     use crate::parser::{FromTable, Join, JoinConstraint, JoinType};
 
     use super::{
-        ColumnDef, ColumnType, Create, Expr, Insert, Op, Parser, Query, SelectItem, Statement,
-        Value,
+        ColumnDef, ColumnType, Create, Expr, Ident, Insert, Op, Parser, Query, SelectItem,
+        Statement, Value,
     };
 
     #[test]
@@ -771,7 +773,11 @@ mod test {
         let want = vec![
             SelectItem::QualifiedWildcard(vec!["t1".into()]),
             SelectItem::Wildcard,
-            SelectItem::Expr(Expr::CompoundIdent(vec!["s1".into(), "t1".into(), "c1".into()])),
+            SelectItem::Expr(Expr::Ident(Ident::Compound(vec![
+                "s1".into(),
+                "t1".into(),
+                "c1".into(),
+            ]))),
         ];
         let have = Parser::new(input).unwrap().parse_projection().unwrap();
         assert_eq!(want, have)
@@ -792,7 +798,7 @@ mod test {
         test_expr_binary_op,
         "c1 < 5",
         Expr::BinaryOp {
-            left: Box::new(Expr::Ident("c1".into())),
+            left: Box::new(Expr::Ident(Ident::Single("c1".into()))),
             op: Op::Lt,
             right: Box::new(Expr::Value(Value::Number("5".into()))),
         }
@@ -803,13 +809,13 @@ mod test {
         "c1 < 5 and c2 in (1, \"2\", 3, \"4\")",
         Expr::BinaryOp {
             left: Box::new(Expr::BinaryOp {
-                left: Box::new(Expr::Ident("c1".into())),
+                left: Box::new(Expr::Ident(Ident::Single("c1".into()))),
                 op: Op::Lt,
                 right: Box::new(Expr::Value(Value::Number("5".into()))),
             }),
             op: Op::And,
             right: Box::new(Expr::InList {
-                expr: Box::new(Expr::Ident("c2".into())),
+                expr: Box::new(Expr::Ident(Ident::Single("c2".into()))),
                 list: vec![
                     Expr::Value(Value::Number("1".into())),
                     Expr::Value(Value::String("2".into())),
@@ -826,13 +832,13 @@ mod test {
         "c1 < 5 and c2 not in (1, \"2\", 3, \"4\")",
         Expr::BinaryOp {
             left: Box::new(Expr::BinaryOp {
-                left: Box::new(Expr::Ident("c1".into())),
+                left: Box::new(Expr::Ident(Ident::Single("c1".into()))),
                 op: Op::Lt,
                 right: Box::new(Expr::Value(Value::Number("5".into()))),
             }),
             op: Op::And,
             right: Box::new(Expr::InList {
-                expr: Box::new(Expr::Ident("c2".into())),
+                expr: Box::new(Expr::Ident(Ident::Single("c2".into()))),
                 list: vec![
                     Expr::Value(Value::Number("1".into())),
                     Expr::Value(Value::String("2".into())),
@@ -849,13 +855,13 @@ mod test {
         "(c1 < 5) and (c2 not in (1, \"2\", 3, \"4\"))",
         Expr::BinaryOp {
             left: Box::new(Expr::BinaryOp {
-                left: Box::new(Expr::Ident("c1".into())),
+                left: Box::new(Expr::Ident(Ident::Single("c1".into()))),
                 op: Op::Lt,
                 right: Box::new(Expr::Value(Value::Number("5".into()))),
             }),
             op: Op::And,
             right: Box::new(Expr::InList {
-                expr: Box::new(Expr::Ident("c2".into())),
+                expr: Box::new(Expr::Ident(Ident::Single("c2".into()))),
                 list: vec![
                     Expr::Value(Value::Number("1".into())),
                     Expr::Value(Value::String("2".into())),
@@ -872,23 +878,23 @@ mod test {
         "c1 < (5 < c2) AND (c1 < 5) < c2",
         Expr::BinaryOp {
             left: Box::new(Expr::BinaryOp {
-                left: Box::new(Expr::Ident("c1".into())),
+                left: Box::new(Expr::Ident(Ident::Single("c1".into()))),
                 op: Op::Lt,
                 right: Box::new(Expr::BinaryOp {
                     left: Box::new(Expr::Value(Value::Number("5".into()))),
                     op: Op::Lt,
-                    right: Box::new(Expr::Ident("c2".into()))
+                    right: Box::new(Expr::Ident(Ident::Single("c2".into())))
                 })
             }),
             op: Op::And,
             right: Box::new(Expr::BinaryOp {
                 left: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Ident("c1".into())),
+                    left: Box::new(Expr::Ident(Ident::Single("c1".into()))),
                     op: Op::Lt,
                     right: Box::new(Expr::Value(Value::Number("5".into())))
                 }),
                 op: Op::Lt,
-                right: Box::new(Expr::Ident("c2".into()))
+                right: Box::new(Expr::Ident(Ident::Single("c2".into())))
             })
         }
     );
@@ -897,7 +903,7 @@ mod test {
         test_expr_between,
         "c1 between 0 and 200",
         Expr::Between {
-            expr: Box::new(Expr::Ident("c1".into())),
+            expr: Box::new(Expr::Ident(Ident::Single("c1".into()))),
             negated: false,
             low: Box::new(Expr::Value(Value::Number("0".into()))),
             high: Box::new(Expr::Value(Value::Number("200".into()))),
@@ -908,7 +914,7 @@ mod test {
         test_expr_not_between,
         "c1 not between 0 and 200",
         Expr::Between {
-            expr: Box::new(Expr::Ident("c1".into())),
+            expr: Box::new(Expr::Ident(Ident::Single("c1".into()))),
             negated: true,
             low: Box::new(Expr::Value(Value::Number("0".into()))),
             high: Box::new(Expr::Value(Value::Number("200".into()))),
@@ -919,7 +925,11 @@ mod test {
         test_expr_compound_ident,
         "s1.t1.c1 > 5",
         Expr::BinaryOp {
-            left: Box::new(Expr::CompoundIdent(vec!["s1".into(), "t1".into(), "c1".into()])),
+            left: Box::new(Expr::Ident(Ident::Compound(vec![
+                "s1".into(),
+                "t1".into(),
+                "c1".into()
+            ]))),
             op: Op::Gt,
             right: Box::new(Expr::Value(Value::Number("5".into()))),
         }
@@ -940,9 +950,9 @@ mod test {
                     constraint: JoinConstraint::Using(vec!["c1".into()])
                 }],
                 filter: Some(Expr::BinaryOp {
-                    left: Box::new(Expr::CompoundIdent(vec!["t1".into(), "c2".into()])),
+                    left: Box::new(Expr::Ident(Ident::Compound(vec!["t1".into(), "c2".into()]))),
                     op: Op::Gt,
-                    right: Box::new(Expr::CompoundIdent(vec!["t2".into(), "c2".into()]))
+                    right: Box::new(Expr::Ident(Ident::Compound(vec!["t2".into(), "c2".into()])))
                 }),
                 group: vec![]
             }))),
@@ -967,9 +977,9 @@ mod test {
                 from: FromTable::Table { name: vec!["t2".into()], alias: None },
                 ty: JoinType::Inner,
                 constraint: JoinConstraint::On(Expr::BinaryOp {
-                    left: Box::new(Expr::CompoundIdent(vec!["t1".into(), "c1".into()])),
+                    left: Box::new(Expr::Ident(Ident::Compound(vec!["t1".into(), "c1".into()]))),
                     op: Op::Eq,
-                    right: Box::new(Expr::CompoundIdent(vec!["t2".into(), "c1".into()])),
+                    right: Box::new(Expr::Ident(Ident::Compound(vec!["t2".into(), "c1".into()]))),
                 }),
             },
             Join {
@@ -1009,7 +1019,7 @@ mod test {
         let input = "insert into t1 values ((1, 2), (\"1\", \"2\"))";
 
         let want = Insert {
-            table: vec!["t1".into()],
+            table: Ident::Single("t1".into()),
             rows: vec![
                 vec![
                     Expr::Value(Value::Number("1".into())),
