@@ -1,4 +1,4 @@
-use crate::tokeniser::{Keyword, Location, Token, TokenWithLocation, Tokeniser, TokeniserError};
+use crate::tokeniser::{Keyword, Location, Token, TokenWithLocation, Tokeniser};
 
 #[derive(PartialEq, Debug)]
 pub enum Statement {
@@ -113,7 +113,17 @@ pub struct Insert {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct Update {}
+pub struct Update {
+    table: Ident,
+    set: Vec<Set>,
+    filter: Option<Expr>,
+}
+
+#[derive(PartialEq, Debug)]
+pub struct Set {
+    column: Ident,
+    expr: Expr,
+}
 
 #[derive(PartialEq, Debug)]
 pub struct Delete {}
@@ -313,35 +323,8 @@ impl Parser {
         self.parse_keywords(&[Keyword::Insert, Keyword::Into])?;
 
         let TokenWithLocation(token, location) = self.peek();
-        let table = match token {
-            Token::Ident(a) => {
-                self.next();
-
-                let mut parts = Vec::with_capacity(2);
-                if self.check_tokens(&[Token::Dot]) {
-                    parts.push(a);
-
-                    let TokenWithLocation(b, location) = self.next();
-                    match b {
-                        Token::Ident(b) => parts.push(b),
-                        _ => Err(Unexpected(&b, &location))?,
-                    };
-
-                    if self.check_tokens(&[Token::Dot]) {
-                        let TokenWithLocation(c, location) = self.next();
-                        match c {
-                            Token::Ident(c) => parts.push(c),
-                            _ => Err(Unexpected(&c, &location))?,
-                        };
-                    }
-
-                    Ident::Compound(parts)
-                } else {
-                    Ident::Single(a)
-                }
-            }
-            _ => Err(Unexpected(&token, &location))?,
-        };
+        let Token::Ident(_) = token else { Err(Unexpected(&token, &location))? };
+        let table = self.parse_ident()?;
 
         self.parse_keywords(&[Keyword::Values])?;
 
@@ -364,7 +347,27 @@ impl Parser {
     }
 
     fn parse_update(&mut self) -> Result<Update> {
-        Ok(Update {})
+        self.parse_keywords(&[Keyword::Update])?;
+
+        let table = self.parse_ident()?;
+
+        self.parse_keywords(&[Keyword::Set])?;
+
+        let mut set = Vec::new();
+        while {
+            let column = self.parse_ident()?;
+            self.parse_tokens(&[Token::Eq])?;
+            let expr = self.parse_expr(0)?;
+
+            set.push(Set { column, expr });
+
+            self.check_tokens(&[Token::Comma])
+        } {}
+
+        let filter =
+            if self.check_keywords(&[Keyword::Where]) { Some(self.parse_expr(0)?) } else { None };
+
+        Ok(Update { table, set, filter })
     }
 
     fn parse_delete(&mut self) -> Result<Delete> {
@@ -499,32 +502,7 @@ impl Parser {
 
             Token::Keyword(Keyword::Select) => Expr::SubQuery(self.parse_query().map(Box::new)?),
 
-            Token::Ident(a) => {
-                self.next();
-
-                let mut parts = Vec::with_capacity(2);
-                if self.check_tokens(&[Token::Dot]) {
-                    parts.push(a);
-
-                    let TokenWithLocation(b, location) = self.next();
-                    match b {
-                        Token::Ident(b) => parts.push(b),
-                        _ => Err(Unexpected(&b, &location))?,
-                    };
-
-                    if self.check_tokens(&[Token::Dot]) {
-                        let TokenWithLocation(c, location) = self.next();
-                        match c {
-                            Token::Ident(c) => parts.push(c),
-                            _ => Err(Unexpected(&c, &location))?,
-                        };
-                    }
-
-                    Expr::Ident(Ident::Compound(parts))
-                } else {
-                    Expr::Ident(Ident::Single(a))
-                }
-            }
+            Token::Ident(_) => Expr::Ident(self.parse_ident()?),
 
             Token::LParen => {
                 self.next();
@@ -652,6 +630,36 @@ impl Parser {
         Ok(Expr::InList { expr: Box::new(expr), list, negated })
     }
 
+    fn parse_ident(&mut self) -> Result<Ident> {
+        let TokenWithLocation(token, location) = self.next();
+        let Token::Ident(a) = token else { Err(Unexpected(&token, &location))? };
+
+        let mut parts = Vec::with_capacity(3);
+        let ident = if self.check_tokens(&[Token::Dot]) {
+            parts.push(a);
+
+            let TokenWithLocation(b, location) = self.next();
+            match b {
+                Token::Ident(b) => parts.push(b),
+                _ => Err(Unexpected(&b, &location))?,
+            };
+
+            if self.check_tokens(&[Token::Dot]) {
+                let TokenWithLocation(c, location) = self.next();
+                match c {
+                    Token::Ident(c) => parts.push(c),
+                    _ => Err(Unexpected(&c, &location))?,
+                };
+            }
+
+            Ident::Compound(parts)
+        } else {
+            Ident::Single(a)
+        };
+
+        Ok(ident)
+    }
+
     // Will advance and return true if tokens match, otherwise walk back and return false
     fn check_tokens(&mut self, tokens: &[Token]) -> bool {
         let index = self.index;
@@ -742,8 +750,8 @@ mod test {
     use crate::parser::{FromTable, Join, JoinConstraint, JoinType};
 
     use super::{
-        ColumnDef, ColumnType, Create, Expr, Ident, Insert, Op, Parser, Query, SelectItem,
-        Statement, Value,
+        ColumnDef, ColumnType, Create, Expr, Ident, Insert, Op, Parser, Query, SelectItem, Set,
+        Statement, Update, Value,
     };
 
     #[test]
@@ -1032,6 +1040,33 @@ mod test {
             ],
         };
         let have = Parser::new(input).unwrap().parse_insert().unwrap();
+
+        assert_eq!(want, have)
+    }
+
+    #[test]
+    fn test_parse_update() {
+        let input = "update t1 set c1 = 1, c2 = \"2\" where 1 = 1";
+
+        let want = Update {
+            table: Ident::Single("t1".into()),
+            set: vec![
+                Set {
+                    column: Ident::Single("c1".into()),
+                    expr: Expr::Value(Value::Number("1".into())),
+                },
+                Set {
+                    column: Ident::Single("c2".into()),
+                    expr: Expr::Value(Value::String("2".into())),
+                },
+            ],
+            filter: Some(Expr::BinaryOp {
+                left: Box::new(Expr::Value(Value::Number("1".into()))),
+                op: Op::Eq,
+                right: Box::new(Expr::Value(Value::Number("1".into()))),
+            }),
+        };
+        let have = Parser::new(input).unwrap().parse_update().unwrap();
 
         assert_eq!(want, have)
     }
