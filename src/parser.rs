@@ -75,7 +75,7 @@ enum JoinConstraint {
 #[derive(PartialEq, Debug)]
 enum JoinType {
     Inner,
-    // TODO
+    // TODO: add more joins
 }
 
 #[derive(PartialEq, Debug)]
@@ -555,8 +555,13 @@ impl Parser {
         let expr = match token {
             Token::Keyword(kw) => match kw {
                 Keyword::Is => {
-                    // [not] null, true, false
-                    todo!()
+                    let negated = self.check_keywords(&[Keyword::Not]);
+                    let TokenWithLocation(token, location) = self.next();
+                    match token {
+                        Token::Keyword(Keyword::Null) if negated => Expr::IsNotNull(Box::new(expr)),
+                        Token::Keyword(Keyword::Null) => Expr::IsNull(Box::new(expr)),
+                        _ => Err(Unexpected(&token, &location))?,
+                    }
                 }
                 Keyword::Not | Keyword::Between | Keyword::In => {
                     self.index -= 1;
@@ -974,6 +979,16 @@ mod test {
                 }),
                 group: vec![]
             }))),
+        }
+    );
+
+    test_parse_expr!(
+        test_expr_is_null,
+        "c1 is not null and c2 is null",
+        Expr::BinaryOp {
+            left: Box::new(Expr::IsNotNull(Box::new(Expr::Ident(Ident::Single("c1".into()))))),
+            op: Op::And,
+            right: Box::new(Expr::IsNull(Box::new(Expr::Ident(Ident::Single("c2".into()))))),
         }
     );
 
