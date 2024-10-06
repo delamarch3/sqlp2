@@ -126,7 +126,10 @@ pub struct Set {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct Delete {}
+pub struct Delete {
+    table: Ident,
+    filter: Option<Expr>,
+}
 
 #[derive(PartialEq, Debug)]
 pub struct Create {
@@ -371,7 +374,14 @@ impl Parser {
     }
 
     fn parse_delete(&mut self) -> Result<Delete> {
-        Ok(Delete {})
+        self.parse_keywords(&[Keyword::Delete, Keyword::From])?;
+
+        let table = self.parse_ident()?;
+
+        let filter =
+            if self.check_keywords(&[Keyword::Where]) { Some(self.parse_expr(0)?) } else { None };
+
+        Ok(Delete { table, filter })
     }
 
     fn parse_create(&mut self) -> Result<Create> {
@@ -750,8 +760,8 @@ mod test {
     use crate::parser::{FromTable, Join, JoinConstraint, JoinType};
 
     use super::{
-        ColumnDef, ColumnType, Create, Expr, Ident, Insert, Op, Parser, Query, SelectItem, Set,
-        Statement, Update, Value,
+        ColumnDef, ColumnType, Create, Delete, Expr, Ident, Insert, Op, Parser, Query, SelectItem,
+        Set, Statement, Update, Value,
     };
 
     #[test]
@@ -1069,5 +1079,22 @@ mod test {
         let have = Parser::new(input).unwrap().parse_update().unwrap();
 
         assert_eq!(want, have)
+    }
+
+    #[test]
+    fn test_parse_delete() {
+        let input = "delete from t1 where 1 = 1";
+
+        let want = Delete {
+            table: Ident::Single("t1".into()),
+            filter: Some(Expr::BinaryOp {
+                left: Box::new(Expr::Value(Value::Number("1".into()))),
+                op: Op::Eq,
+                right: Box::new(Expr::Value(Value::Number("1".into()))),
+            }),
+        };
+        let have = Parser::new(input).unwrap().parse_delete().unwrap();
+
+        assert_eq!(want, have);
     }
 }
