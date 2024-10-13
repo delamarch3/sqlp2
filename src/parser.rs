@@ -87,7 +87,7 @@ struct Join {
 
 #[derive(PartialEq, Debug)]
 struct OrderByExpr {
-    expr: Expr,
+    exprs: Vec<Expr>,
     desc: bool, // Default is false/ASC
 }
 
@@ -102,8 +102,8 @@ enum SelectItem {
 #[derive(PartialEq, Debug)]
 pub struct Select {
     body: Query,
-    order: OrderByExpr,
-    limit: Expr,
+    order: Option<OrderByExpr>,
+    limit: Option<Expr>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -115,12 +115,12 @@ pub struct Insert {
 #[derive(PartialEq, Debug)]
 pub struct Update {
     table: Ident,
-    set: Vec<Set>,
+    set: Vec<Assignment>,
     filter: Option<Expr>,
 }
 
 #[derive(PartialEq, Debug)]
-pub struct Set {
+pub struct Assignment {
     column: Ident,
     expr: Expr,
 }
@@ -210,15 +210,29 @@ impl Parser {
     fn parse_select(&mut self) -> Result<Select> {
         let body = self.parse_query()?;
 
-        if self.check_keywords(&[Keyword::Order, Keyword::By]) {
-            todo!()
-        }
+        let order = if self.check_keywords(&[Keyword::Order, Keyword::By]) {
+            let mut exprs = Vec::new();
+            while {
+                exprs.push(self.parse_expr(0)?);
+                self.check_tokens(&[Token::Comma])
+            } {}
 
-        if self.check_keywords(&[Keyword::Limit]) {
-            todo!()
-        }
+            let mut order = OrderByExpr { exprs, desc: false };
+            if self.check_keywords(&[Keyword::Desc]) {
+                order.desc = true;
+            } else if self.check_keywords(&[Keyword::Asc]) {
+                order.desc = false;
+            }
 
-        Ok(Select { body, order: todo!(), limit: todo!() })
+            Some(order)
+        } else {
+            None
+        };
+
+        let limit =
+            if self.check_keywords(&[Keyword::Limit]) { Some(self.parse_expr(0)?) } else { None };
+
+        Ok(Select { body, order, limit })
     }
 
     fn parse_query(&mut self) -> Result<Query> {
@@ -234,8 +248,17 @@ impl Parser {
         let filter =
             if self.check_keywords(&[Keyword::Where]) { Some(self.parse_expr(0)?) } else { None };
 
-        let group =
-            if self.check_keywords(&[Keyword::Group, Keyword::By]) { todo!() } else { vec![] };
+        let group = if self.check_keywords(&[Keyword::Group, Keyword::By]) {
+            let mut exprs = Vec::new();
+            while {
+                exprs.push(self.parse_expr(0)?);
+                self.check_tokens(&[Token::Comma])
+            } {}
+
+            exprs
+        } else {
+            vec![]
+        };
 
         Ok(Query { projection, from, joins, filter, group })
     }
@@ -362,7 +385,7 @@ impl Parser {
             self.parse_tokens(&[Token::Eq])?;
             let expr = self.parse_expr(0)?;
 
-            set.push(Set { column, expr });
+            set.push(Assignment { column, expr });
 
             self.check_tokens(&[Token::Comma])
         } {}
@@ -765,8 +788,8 @@ mod test {
     use crate::parser::{FromTable, Join, JoinConstraint, JoinType};
 
     use super::{
-        ColumnDef, ColumnType, Create, Delete, Expr, Ident, Insert, Op, Parser, Query, SelectItem,
-        Set, Statement, Update, Value,
+        Assignment, ColumnDef, ColumnType, Create, Delete, Expr, Ident, Insert, Op, Parser, Query,
+        SelectItem, Statement, Update, Value,
     };
 
     #[test]
@@ -1076,11 +1099,11 @@ mod test {
         let want = Update {
             table: Ident::Single("t1".into()),
             set: vec![
-                Set {
+                Assignment {
                     column: Ident::Single("c1".into()),
                     expr: Expr::Value(Value::Number("1".into())),
                 },
-                Set {
+                Assignment {
                     column: Ident::Single("c2".into()),
                     expr: Expr::Value(Value::String("2".into())),
                 },
