@@ -38,8 +38,6 @@ enum Ident {
 #[derive(PartialEq, Debug)]
 enum Expr {
     Ident(Ident),
-    Wildcard,
-    QualifiedWildcard(Vec<String>),
     Value(Value),
     IsNull(Box<Expr>),
     IsNotNull(Box<Expr>),
@@ -47,7 +45,6 @@ enum Expr {
     Between { expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr> },
     BinaryOp { left: Box<Expr>, op: Op, right: Box<Expr> },
     SubQuery(Box<Query>),
-    // TODO: UnaryOp
     // TODO: functions
 }
 
@@ -62,14 +59,14 @@ struct Query {
 
 #[derive(PartialEq, Debug)]
 enum FromTable {
-    Table { name: Vec<String>, alias: Option<String> },
+    Table { name: Ident, alias: Option<String> },
     Derived { query: Box<Query>, alias: Option<String> },
 }
 
 #[derive(PartialEq, Debug)]
 enum JoinConstraint {
     On(Expr),
-    Using(Vec<String>),
+    Using(Vec<Ident>),
 }
 
 #[derive(PartialEq, Debug)]
@@ -88,14 +85,14 @@ struct Join {
 #[derive(PartialEq, Debug)]
 struct OrderByExpr {
     exprs: Vec<Expr>,
-    desc: bool, // Default is false/ASC
+    desc: bool,
 }
 
 #[derive(PartialEq, Debug)]
 enum SelectItem {
     Expr(Expr),
     AliasedExpr { expr: Expr, alias: String },
-    QualifiedWildcard(Vec<String>),
+    QualifiedWildcard(Ident),
     Wildcard,
 }
 
@@ -266,15 +263,9 @@ impl Parser {
     fn parse_from(&mut self) -> Result<FromTable> {
         let TokenWithLocation(token, location) = self.next();
         let from = match token {
-            Token::Ident(a) => {
-                let mut name = vec![a];
-                if self.check_tokens(&[Token::Dot]) {
-                    let TokenWithLocation(token, location) = self.next();
-                    match token {
-                        Token::Ident(b) => name.push(b),
-                        _ => Err(Unexpected(&token, &location))?,
-                    }
-                }
+            Token::Ident(_) => {
+                self.index -= 1;
+                let name = self.parse_ident()?;
 
                 let mut alias = None;
                 if self.check_keywords(&[Keyword::As]) {
@@ -324,12 +315,7 @@ impl Parser {
 
                 self.parse_tokens(&[Token::LParen])?;
                 while {
-                    let TokenWithLocation(token, location) = self.next();
-                    match token {
-                        Token::Ident(a) => columns.push(a), //  TODO: parse properly
-                        _ => Err(Unexpected(&token, &location))?,
-                    };
-
+                    columns.push(self.parse_ident()?);
                     self.check_tokens(&[Token::Comma])
                 } {}
                 self.parse_tokens(&[Token::RParen])?;
@@ -474,14 +460,14 @@ impl Parser {
             Token::Asterisk => return Ok(SelectItem::Wildcard),
             Token::Ident(a) => {
                 // Try to parse a qualified ident, else reset index and parse_expr
-                let mut parts = Vec::with_capacity(2);
+                let mut parts = Vec::new();
                 if self.check_tokens(&[Token::Dot]) {
-                    parts.push(a);
-
                     let TokenWithLocation(b, location) = self.next();
                     match b {
-                        Token::Ident(b) => parts.push(b),
-                        Token::Asterisk => return Ok(SelectItem::QualifiedWildcard(parts)),
+                        Token::Ident(b) => parts = vec![a, b],
+                        Token::Asterisk => {
+                            return Ok(SelectItem::QualifiedWildcard(Ident::Single(a)))
+                        }
                         _ => Err(Unexpected(&b, &location))?,
                     };
 
@@ -489,7 +475,9 @@ impl Parser {
                         let TokenWithLocation(c, location) = self.next();
                         match c {
                             Token::Ident(_) => {}
-                            Token::Asterisk => return Ok(SelectItem::QualifiedWildcard(parts)),
+                            Token::Asterisk => {
+                                return Ok(SelectItem::QualifiedWildcard(Ident::Compound(parts)))
+                            }
                             _ => Err(Unexpected(&c, &location))?,
                         };
                     }
@@ -817,7 +805,7 @@ mod test {
         let input = "t1.*, *, s1.t1.c1";
 
         let want = vec![
-            SelectItem::QualifiedWildcard(vec!["t1".into()]),
+            SelectItem::QualifiedWildcard(Ident::Single("t1".into())),
             SelectItem::Wildcard,
             SelectItem::Expr(Expr::Ident(Ident::Compound(vec![
                 "s1".into(),
@@ -989,11 +977,11 @@ mod test {
             op: Op::Lt,
             right: Box::new(Expr::SubQuery(Box::new(Query {
                 projection: vec![SelectItem::Wildcard],
-                from: FromTable::Table { name: vec!["t1".into()], alias: None },
+                from: FromTable::Table { name: Ident::Single("t1".into()), alias: None },
                 joins: vec![Join {
-                    from: FromTable::Table { name: vec!["t2".into()], alias: None },
+                    from: FromTable::Table { name: Ident::Single("t2".into()), alias: None },
                     ty: JoinType::Inner,
-                    constraint: JoinConstraint::Using(vec!["c1".into()])
+                    constraint: JoinConstraint::Using(vec![Ident::Single("c1".into())])
                 }],
                 filter: Some(Expr::BinaryOp {
                     left: Box::new(Expr::Ident(Ident::Compound(vec!["t1".into(), "c2".into()]))),
@@ -1019,7 +1007,8 @@ mod test {
     fn test_parse_from() {
         let input = "table1 as t1";
 
-        let want = FromTable::Table { name: vec!["table1".into()], alias: Some("t1".into()) };
+        let want =
+            FromTable::Table { name: Ident::Single("table1".into()), alias: Some("t1".into()) };
         let have = Parser::new(input).unwrap().parse_from().unwrap();
         assert_eq!(want, have)
     }
@@ -1030,7 +1019,7 @@ mod test {
 
         let want = vec![
             Join {
-                from: FromTable::Table { name: vec!["t2".into()], alias: None },
+                from: FromTable::Table { name: Ident::Single("t2".into()), alias: None },
                 ty: JoinType::Inner,
                 constraint: JoinConstraint::On(Expr::BinaryOp {
                     left: Box::new(Expr::Ident(Ident::Compound(vec!["t1".into(), "c1".into()]))),
@@ -1039,9 +1028,12 @@ mod test {
                 }),
             },
             Join {
-                from: FromTable::Table { name: vec!["t3".into()], alias: None },
+                from: FromTable::Table { name: Ident::Single("t3".into()), alias: None },
                 ty: JoinType::Inner,
-                constraint: JoinConstraint::Using(vec!["c2".into(), "c3".into()]),
+                constraint: JoinConstraint::Using(vec![
+                    Ident::Single("c2".into()),
+                    Ident::Single("c3".into()),
+                ]),
             },
         ];
         let have = Parser::new(input).unwrap().parse_joins().unwrap();
@@ -1056,7 +1048,7 @@ mod test {
             from: FromTable::Derived {
                 query: Box::new(Query {
                     projection: vec![SelectItem::Wildcard],
-                    from: FromTable::Table { name: vec!["t1".into()], alias: None },
+                    from: FromTable::Table { name: Ident::Single("t1".into()), alias: None },
                     joins: vec![],
                     filter: None,
                     group: vec![],
@@ -1064,7 +1056,7 @@ mod test {
                 alias: Some("t1".into()),
             },
             ty: JoinType::Inner,
-            constraint: JoinConstraint::Using(vec!["c1".into()]),
+            constraint: JoinConstraint::Using(vec![Ident::Single("c1".into())]),
         }];
         let have = Parser::new(input).unwrap().parse_joins().unwrap();
         assert_eq!(want, have)
