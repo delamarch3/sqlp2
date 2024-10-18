@@ -130,7 +130,7 @@ pub struct Delete {
 
 #[derive(PartialEq, Debug)]
 pub struct Create {
-    name: String,
+    name: Ident,
     columns: Vec<ColumnDef>,
 }
 
@@ -396,11 +396,7 @@ impl Parser {
     fn parse_create(&mut self) -> Result<Create> {
         self.parse_keywords(&[Keyword::Create, Keyword::Table])?;
 
-        let TokenWithLocation(token, location) = self.next();
-        let name = match token {
-            Token::Ident(name) => name,
-            _ => Err(Unexpected(&token, &location))?,
-        };
+        let name = self.parse_ident()?;
 
         self.parse_tokens(&[Token::LParen])?;
         let mut columns = Vec::new();
@@ -789,7 +785,7 @@ mod test {
             )";
 
         let want = vec![Statement::Create(Create {
-            name: "t1".into(),
+            name: Ident::Single("t1".into()),
             columns: vec![
                 ColumnDef { ty: ColumnType::Int, name: "c1".into() },
                 ColumnDef { ty: ColumnType::Varchar(1024), name: "c2".into() },
