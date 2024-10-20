@@ -84,6 +84,12 @@ pub(crate) enum Keyword {
     Set,
     True,
     False,
+    Min,
+    Max,
+    Sum,
+    Avg,
+    Count,
+    Distinct,
 }
 
 impl TryFrom<String> for Keyword {
@@ -94,11 +100,14 @@ impl TryFrom<String> for Keyword {
             "AND" => Keyword::And,
             "AS" => Keyword::As,
             "ASC" => Keyword::Asc,
+            "AVG" => Keyword::Avg,
             "BETWEEN" => Keyword::Between,
             "BY" => Keyword::By,
             "CREATE" => Keyword::Create,
+            "COUNT" => Keyword::Count,
             "DELETE" => Keyword::Delete,
             "DESC" => Keyword::Desc,
+            "DISTINCT" => Keyword::Distinct,
             "FALSE" => Keyword::False,
             "FROM" => Keyword::From,
             "GROUP" => Keyword::Group,
@@ -109,12 +118,15 @@ impl TryFrom<String> for Keyword {
             "IS" => Keyword::Is,
             "JOIN" => Keyword::Join,
             "LIMIT" => Keyword::Limit,
+            "MAX" => Keyword::Max,
+            "MIN" => Keyword::Min,
             "NOT" => Keyword::Not,
             "NULL" => Keyword::Null,
             "ON" => Keyword::On,
             "OR" => Keyword::Or,
             "SELECT" => Keyword::Select,
             "SET" => Keyword::Set,
+            "SUM" => Keyword::Sum,
             "TABLE" => Keyword::Table,
             "TRUE" => Keyword::True,
             "UPDATE" => Keyword::Update,
@@ -165,6 +177,7 @@ impl<'a> Tokeniser<'a> {
         Self { chars: src.chars().peekable(), line: 0, col: 0 }
     }
 
+    #[allow(unused)]
     pub fn collect(mut self) -> Result<Vec<Token>, TokeniserError> {
         let mut v = Vec::new();
         while {
@@ -515,6 +528,28 @@ mod test {
             Token::Ident("s1".into()),
             Token::Dot,
             Token::Ident("t1".into()),
+            Token::Eof
+        ]
+    );
+
+    test_tokeniser!(
+        test_functions,
+        "avg(c1), count(*), min(0)",
+        [
+            Token::Keyword(Keyword::Avg),
+            Token::LParen,
+            Token::Ident("c1".into()),
+            Token::RParen,
+            Token::Comma,
+            Token::Keyword(Keyword::Count),
+            Token::LParen,
+            Token::Asterisk,
+            Token::RParen,
+            Token::Comma,
+            Token::Keyword(Keyword::Min),
+            Token::LParen,
+            Token::NumberLiteral("0".into()),
+            Token::RParen,
             Token::Eof
         ]
     );

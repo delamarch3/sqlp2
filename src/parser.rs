@@ -36,7 +36,25 @@ enum Ident {
 }
 
 #[derive(PartialEq, Debug)]
+enum FunctionName {
+    Min,
+    Max,
+    Sum,
+    Avg,
+    Count,
+}
+
+#[derive(PartialEq, Debug)]
+struct Function {
+    name: FunctionName,
+    args: Vec<Expr>,
+    distinct: bool,
+}
+
+#[derive(PartialEq, Debug)]
 enum Expr {
+    Wildcard,
+    QualifiedWildcard(Ident),
     Ident(Ident),
     Value(Value),
     IsNull(Box<Expr>),
@@ -45,7 +63,7 @@ enum Expr {
     Between { expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr> },
     BinaryOp { left: Box<Expr>, op: Op, right: Box<Expr> },
     SubQuery(Box<Query>),
-    // TODO: functions
+    Function(Function),
 }
 
 #[derive(PartialEq, Debug)]
@@ -519,7 +537,29 @@ impl Parser {
 
             Token::Keyword(Keyword::Select) => Expr::SubQuery(self.parse_query().map(Box::new)?),
 
-            Token::Ident(_) => Expr::Ident(self.parse_ident()?),
+            Token::Keyword(kw) => match kw {
+                Keyword::Min | Keyword::Max | Keyword::Sum | Keyword::Avg | Keyword::Count => {
+                    Expr::Function(self.parse_function()?)
+                }
+                _ => Err(Unexpected(&token, &location))?,
+            },
+
+            Token::Ident(_) => {
+                let ident = self.parse_ident()?;
+                match &ident {
+                    Ident::Compound(i)
+                        if i.len() != 3 && self.check_tokens(&[Token::Dot, Token::Asterisk]) =>
+                    {
+                        Expr::QualifiedWildcard(ident)
+                    }
+                    _ => Expr::Ident(ident),
+                }
+            }
+
+            Token::Asterisk => {
+                self.next();
+                Expr::Wildcard
+            }
 
             Token::LParen => {
                 self.next();
@@ -682,6 +722,32 @@ impl Parser {
         Ok(ident)
     }
 
+    fn parse_function(&mut self) -> Result<Function> {
+        let TokenWithLocation(token, location) = self.next();
+        let name = match token {
+            Token::Keyword(kw) => match kw {
+                Keyword::Min => FunctionName::Min,
+                Keyword::Max => FunctionName::Max,
+                Keyword::Sum => FunctionName::Sum,
+                Keyword::Avg => FunctionName::Avg,
+                Keyword::Count => FunctionName::Count,
+                _ => Err(Unexpected(&token, &location))?,
+            },
+            _ => Err(Unexpected(&token, &location))?,
+        };
+
+        self.parse_tokens(&[Token::LParen])?;
+        let distinct = self.check_keywords(&[Keyword::Distinct]);
+        let mut args = Vec::new();
+        while {
+            args.push(self.parse_expr(0)?);
+            self.check_tokens(&[Token::Comma])
+        } {}
+        self.parse_tokens(&[Token::RParen])?;
+
+        Ok(Function { name, args, distinct })
+    }
+
     // Will advance and return true if tokens match, otherwise walk back and return false
     fn check_tokens(&mut self, tokens: &[Token]) -> bool {
         let index = self.index;
@@ -772,8 +838,8 @@ mod test {
     use crate::parser::{FromTable, Join, JoinConstraint, JoinType};
 
     use super::{
-        Assignment, ColumnDef, ColumnType, Create, Delete, Expr, Ident, Insert, Op, Parser, Query,
-        SelectItem, Statement, Update, Value,
+        Assignment, ColumnDef, ColumnType, Create, Delete, Expr, Function, FunctionName, Ident,
+        Insert, Op, OrderByExpr, Parser, Query, Select, SelectItem, Statement, Update, Value,
     };
 
     #[test]
@@ -1120,6 +1186,41 @@ mod test {
             }),
         };
         let have = Parser::new(input).unwrap().parse_delete().unwrap();
+
+        assert_eq!(want, have);
+    }
+
+    #[test]
+    fn test_parse_select() {
+        let input = "select c1, count(distinct *), min(c1) from t1 group by c1 order by c1 limit 5";
+
+        let want = Select {
+            body: Query {
+                projection: vec![
+                    SelectItem::Expr(Expr::Ident(Ident::Single("c1".into()))),
+                    SelectItem::Expr(Expr::Function(Function {
+                        name: FunctionName::Count,
+                        args: vec![Expr::Wildcard],
+                        distinct: true,
+                    })),
+                    SelectItem::Expr(Expr::Function(Function {
+                        name: FunctionName::Min,
+                        args: vec![Expr::Ident(Ident::Single("c1".into()))],
+                        distinct: false,
+                    })),
+                ],
+                from: FromTable::Table { name: Ident::Single("t1".into()), alias: None },
+                joins: vec![],
+                filter: None,
+                group: vec![Expr::Ident(Ident::Single("c1".into()))],
+            },
+            order: Some(OrderByExpr {
+                exprs: vec![Expr::Ident(Ident::Single("c1".into()))],
+                desc: false,
+            }),
+            limit: Some(Expr::Value(Value::Number("5".into()))),
+        };
+        let have = Parser::new(input).unwrap().parse_select().unwrap();
 
         assert_eq!(want, have);
     }
